@@ -86,10 +86,14 @@ def just_flexo(
         os.makedirs(test_dir)
 
 
-    particles = extracted_particles(ssorted_pcls, out_dir = out_dir,
+    particles = extracted_particles(ssorted_pcls, 
+                                    apix = apix, 
+                                    out_dir = out_dir,
+                                    excludelist = excludelist,
                                     base_name = base_name,
                                     chunk_base = chunk_base,
                                     n_peaks = 100,
+                                    groups = groups,
                                     tilt_angles = tlt)
 
 #VP EDIT: now within class extracted_particles
@@ -136,8 +140,8 @@ def just_flexo(
 #       
 #    tilt_angles = [float(x.strip('\n')) for x in open(tlt)][exc_mask]
 
-    particles.remove_tilts_using_excludelist(excludelist)
-    particles.remove_group_outliers(groups)
+#    particles.remove_tilts_using_excludelist(excludelist)
+#    particles.remove_group_outliers(groups)
     c_tasks = particles.split_for_processchunks(pcls_per_core)
 
     def fstr(flist, c_task):
@@ -253,132 +257,24 @@ def just_flexo(
 #                      + '-%03d_peaks.npy' % pcl_index)
 #        cc_peaks[:, x] = np.load(tmp_in) 
         
+        
     particles.read_cc_peaks()
     particles.plot_median_cc_vs_tilt()
     particles.plot_particle_med_cc()
-    cos_model = particles.fit_cosine()
+    particles.plot_shift_magnitude_v_cc()
+    particles.plot_global_shifts()
     
+    particles.pick_shifts_basic_weighting(neighbour_distance = 60,
+                                    n_peaks = 5,
+                                    cc_weight_exp = 5) 
     
-    
-    
-    
-    
-    
-    
-    plot_cc_per_tilt(cc_peaks, ssorted_pcls, out_dir = out_dir)
-    cos_model = fit_thickness(peak_median, tilt_angles, return_model = True)
-    
-    
-    dists = euc_dist(cc_peaks[:,:,:,:2])
-    is_dists = intershift_euc_dist(cc_peaks[:,:,:,:2])
-    #weighing looks like a bad idea   
-    weighed_cc = weigh_cc_by_tilt(cc_peaks, ssorted_pcls[:, 0, 2])
-    weighed_cc_peaks = deepcopy(cc_peaks)
-    weighed_cc_peaks[:, :, :, 2] = weighed_cc
-    
-    plot_dists_vs_cc(weighed_cc, dists)
-    plot_cc_per_tilt(weighed_cc_peaks, ssorted_pcls, out_dir = False)
-
-    #instead plot x, y, peak val in 3D and look for clustering per particle/per group
-
-def is_dist_over_cc_value(cc_peaks, npeaks = 1, plot = True):
-    is_dist = intershift_euc_dist(cc_peaks[:,:,:,:2])
-    mm = np.array(np.where(is_dist[:,:,:npeaks] == 0, is_dist[:,:,:npeaks], 1), dtype = bool)
-    p_over_d = cc_peaks[:,:,:npeaks,2][mm]/is_dist[:,:,:npeaks][mm]
-    if plot:
-        plt.hist(p_over_d, 50)
-        plt.show()
-    return p_over_d
-
-def weigh_cc_by_tilt(cc_peaks, tilt_angles):
-    peak_median = np.median(cc_peaks[:, :, 0, 2], axis = 1)
-    cos_model = fit_thickness(peak_median, tilt_angles, return_model = True)
-    norm_peaks = cc_peaks[:, :, :, 2]/cos_model[:, None, None]
-    return norm_peaks
-    
-def plot_dists_vs_cc(cc_vals, dists, cc_multiplier = 100):
-    dists = dists[cc_vals != 0.]
-    cc_vals = cc_vals[cc_vals != 0.]
-    plt.figure()
-    plt.scatter(cc_vals, dists)
-    plt.figure()
-    heatmap, xedges, yedges = np.histogram2d(
-                               cc_vals*cc_multiplier,  dists, bins=50)
-    extent = [xedges[0], xedges[-1], yedges[0], yedges[-1]]
-    plt.imshow(heatmap.T, extent=extent, origin='lower', cmap='viridis')
-    plt.show()
-    
-def euc_dist(data):
-    """
-    Input:
-        data [whatever number of dim by 2] assuming the last dimension are coords
-    Output:
-        distances [whatever nunber of dim]
-    """
-    return np.linalg.norm(0 - data, axis = data.ndim - 1)
+    outmod_name = particles.write_fiducial_model(ali)
 
 
-
-def plot_cc_per_tilt(cc_peaks, ssorted_pcls, out_dir = False):
-    #x values are not continuous but easier to look at as line plot...
-    #gaps in X (tilts) are filled in and not ommited.  Something to play with
-    #in the future...
-    plt.figure()
-    peak_median = np.median(cc_peaks[:,:,0,2], axis = 1)
-    q25, q75 = np.percentile(cc_peaks[:,:,0,2], [25, 75], axis = 1)
-    pmin = np.min(cc_peaks[:,:,0,2], axis = 1)
-    pmax = np.max(cc_peaks[:,:,0,2], axis = 1)
-    xvals = np.array(ssorted_pcls[:,0,2], dtype = int)
-    plt.plot(xvals, peak_median, color = 'midnightblue')
-    plt.fill_between(xvals, pmax, pmin, color = 'lightsteelblue')
-    plt.fill_between(xvals, q25, q75, color = 'cornflowerblue')
-    plt.xlabel('tilt number')
-    plt.ylabel('cross correlation')
-    plt.suptitle('Cross correlation peak median, quartiles and min/max.')
-    if out_dir:
-        plt.savefig(join(out_dir, 'tilt_cc_values.png'))
-        plt.close()
-
-
-
-def fit_thickness(data, tilt_angles, init_scale=1, init_const=0,
-                  return_model = False):
-    """Author: Daven Vasishtan
-    """
-    def f(p):
-        model = p[0] * np.cos(np.radians(tilt_angles))+p[1]
-        return np.sum((data-model)**2)
-    new_params = minimize(f, [init_scale, init_const])
-    if not return_model:
-        return new_params
-    else:
-        return (new_params.x[0] * np.cos(np.radians(tilt_angles))
-                + new_params.x[1])
-
-
-
-        
-    
-    
-    
-    
-    
-    
-
-    #combine csv parts
-    comb_csv, sorted_shifts = csv_sync(out_dir, chunk_base,
-                                       return_sorted = True)
-    #add shifts to point coords and write fiducial model
-    outmod_name = p_shifts_to_model_points(ssorted_pcls, sorted_shifts,
-                                out_dir, excludelist, groups, ali, debug)
-
- 
-    
     #don't know what to do with the .xtlt file. under what circumstances
     #does tiltalign create it?
     xfile = False
-  
-    
+     
     output_xf, localxf, output_tlt, zfac = format_align(out_dir,
                             base_name, ali, tlt, tomo_binning,
                             outmod_name, axiszshift,
@@ -387,7 +283,8 @@ def fit_thickness(data, tilt_angles, init_scale=1, init_const=0,
     #OFFSET has to be 0 in tlt.com if it's specified in align.com !
     imodscript('align.com', os.path.realpath(out_dir))
     OFFSET = 0
-    output_ali = format_newst(base_name, out_dir, st, output_xf, tomo_binning)
+    output_ali = format_newst(base_name, out_dir, st, output_xf, tomo_binning,
+                              tomo_size)
     output_rec = format_tilt(base_name, out_dir, output_ali, output_tlt,
                              tomo_binning, thickness, global_xtilt, 0,
                              SHIFT, xfile, localxf, zfac, excludelist)
@@ -399,14 +296,11 @@ def fit_thickness(data, tilt_angles, init_scale=1, init_const=0,
         Go to special > bead helper > fix contours, save and try again.""")
 
 
-
-
-
-
     #make small tomogram and check for global positioning relative to original
     #tomogram (or tomogram from previous iteration)
     SHIFT, OFFSET, global_xtilt = match_tomos(tomo_binning, out_dir,
-                            base_name, orig_rec_dir, spec_tiny_size)
+                            base_name, orig_rec_dir, spec_tiny_size,
+                            tomo_size)
 
     #final align.com
     output_xf, localxf, output_tlt, zfac = format_align(out_dir, base_name,
@@ -420,7 +314,8 @@ def fit_thickness(data, tilt_angles, init_scale=1, init_const=0,
     OFFSET = 0
     #there need to be comfiles with default naming and default binning for
     #future iterations
-    output_ali = format_newst(base_name, out_dir, st, output_xf, tomo_binning)
+    output_ali = format_newst(base_name, out_dir, st, output_xf, tomo_binning,
+                              tomo_size)
     #OFFSET has to be 0 in tlt.com if it's specified in align.com !
     output_rec = format_tilt(base_name, out_dir, output_ali, output_tlt,
                              tomo_binning, thickness,
@@ -491,9 +386,10 @@ def fit_thickness(data, tilt_angles, init_scale=1, init_const=0,
                             global_xtilt, SHIFT, xfile, localxf, zfac,
                             excludelist, defocus_file, V, Cs, ampC,
                             min(peet_apix, apix),
+                            tomo_size,
                             deftol = 200,
                             interp_w = 4, #this shouldn't be 4 everywhere...
-                            n_tilts = ssorted_pcls.shape[0],
+                            n_tilts = particles.num_tilts,
                             machines = machines)
     
     def make_link(src, dst):
@@ -515,9 +411,10 @@ def fit_thickness(data, tilt_angles, init_scale=1, init_const=0,
                             global_xtilt, SHIFT, xfile, localxf, zfac,
                             excludelist, defocus_file, V, Cs, ampC,
                             max(peet_apix, apix),
+                            tomo_size,
                             deftol = 200,
                             interp_w = 4, #this shouldn't be 4 everywhere...
-                            n_tilts = ssorted_pcls.shape[0],
+                            n_tilts = particles.num_tilts,
                             machines = machines)
         if tomo_binning > peet_bin:
             make_link(output_rec, default_full)
