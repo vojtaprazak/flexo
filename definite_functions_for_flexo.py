@@ -48,11 +48,14 @@ import csv
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 import signal
-import time
+#import time
 import warnings
 
 #import timeit
-
+if sys.version[0] == '3':
+    from itertools import zip_longest
+elif sys.version[0] == '2':
+    from itertools import izip_longest as zip_longest
 
 def deprecated_cc_but_better(pcl_n, ref, query, limit, interp, tilt_angles,
                   zero_tilt, centre_bias = 0.1, thickness_scaling = 1.5,
@@ -65,7 +68,7 @@ def deprecated_cc_but_better(pcl_n, ref, query, limit, interp, tilt_angles,
     Zero_tlt from 1
     """
     if not log and debug > 0:
-        print 'cc_but_better: No log file specified, logging disabled.'
+        print('cc_but_better: No log file specified, logging disabled.')
         debug = 0
         
     debug_out = []
@@ -315,8 +318,8 @@ def read_comfiles(rec_dir):
                             if len(c) == 1:
                                 excludelist.append(int(b))
                             else:
-                                excludelist.extend(range(int(c[0]),
-                                                         int(c[1]) + 1))
+                                excludelist.extend(list(range(int(c[0]),
+                                                         int(c[1]) + 1)))
                         excludelist.sort()  
                         #VP change 13/06/2020: excludelist should be numbered
                         #from 1.
@@ -450,8 +453,8 @@ def verify_inputs(rec_dir, base_name, out_dir, defocus_file,
     if not input_binning:
         tomo_binning = np.round(tomo_apix/stack_apix, decimals = 1)   
         ali_binning = np.round(ali_apix/stack_apix, decimals = 1)   
-        print 'Tomogram binning = %s' % tomo_binning
-        print 'Aligned stack binning = %s' % ali_binning      
+        print('Tomogram binning = %s' % tomo_binning)
+        print('Aligned stack binning = %s' % ali_binning)      
     else:
         tomo_binning = input_binning
     
@@ -497,7 +500,7 @@ def rotate_model(tomo, full_tomo, ali, base_name,
     m += offsets
     tmp_mod = join(out_dir, 'tmp.mod')
     if float(model_file_binning) != 1.:
-        print 'Model file binning %s' % model_file_binning
+        print('Model file binning %s' % model_file_binning)
         m = m * model_file_binning
 
     mout = PEETmodel()
@@ -534,7 +537,7 @@ def rotate_model(tomo, full_tomo, ali, base_name,
         for y in range(len(add_tilt_params)):
             tilt_str.append(add_tilt_params[y])     
     check_output(('').join(tilt_str), shell = True)
-    print ('').join(tilt_str)
+    print(('').join(tilt_str))
     rawmod = PEETmodel(reprojected_mod).get_all_points()
     max_tilt = int(np.round(max(rawmod[:,2])+1, decimals = 0))
     rsorted_pcls = np.array([np.array(rawmod[x::max_tilt])
@@ -603,8 +606,8 @@ def replace_pcles(average_map, tomo_size, csv_file, mod_file, outfile, apix,
     
     #tomo_size.reverse()
     if mod.max() > np.array(tomo_size).max():
-        print 'Maximum model coordinates exceed volume size. %s %s'\
-        % (mod.max(),  np.array(tomo_size).max())
+        print('Maximum model coordinates exceed volume size. %s %s'\
+        % (mod.max(),  np.array(tomo_size).max()))
     
 #    print offsets, mod
     for p in range(len(mod)):
@@ -686,7 +689,7 @@ def replace_pcles(average_map, tomo_size, csv_file, mod_file, outfile, apix,
     else:
         tomo.fullMap = -tomo.fullMap
     if outfile:
-        print 'Writing MRC file %s' % (outfile)
+        print('Writing MRC file %s' % (outfile))
     
         write_mrc(outfile, tomo.fullMap)
 
@@ -808,7 +811,7 @@ def lame_mask(surface_model, tomo_size, out_mask = False, plot_planes = False,
         ax.plot_wireframe(X1, Y1, Z1)
         ax.plot_wireframe(X2, Y2, Z2, color = 'k')
     mask = (np.ones((tomo_size[1], tomo_size[0], tomo_size[2]))[:,:]
-            *range(tomo_size[2]))
+            *list(range(tomo_size[2])))
     mask = np.logical_and(mask < Z1[:,:,None], mask > Z2[:,:,None])
     mask = np.swapaxes(mask, 1, 2)*1
     if rotx:
@@ -860,7 +863,7 @@ def NEW_mask_from_plotback(volume, out_mask, grey_dilation_level = 5,
     if not out_smooth_mask:
         bb, out_smooth_mask = split(out_mask)
         out_smooth_mask = join(bb, 'smooth_' + out_smooth_mask)
-    print 'applied mtffilter -3 -l 0.001,0.03 to smooth mask'
+    print('applied mtffilter -3 -l 0.001,0.03 to smooth mask')
     check_output('mtffilter -3 -l 0.001,0.03 %s %s' %
                  (out_mask, out_smooth_mask), shell = True)   
     
@@ -923,7 +926,7 @@ def make_non_overlapping_pcl_models(sorted_pcls, box_size, out_dir,
     ssorted_pcls = np.dstack((sorted_pcls,
                               np.zeros((sorted_pcls.shape[0],
                                         sorted_pcls.shape[1], 2))))  
-    ssorted_pcls[:,:,3] =  range(sorted_pcls.shape[1])    
+    ssorted_pcls[:,:,3] =  list(range(sorted_pcls.shape[1]))    
     #[number of tilts:model points per tilt:
     # xcoords, ycoords, tilt number, particle index, group id (from 0))]
 
@@ -1009,8 +1012,8 @@ def make_non_overlapping_pcl_models(sorted_pcls, box_size, out_dir,
     #filter out small groups    
     toosmall = groups.sum(axis = 1)/float(mm.shape[0]) < threshold
     if np.any(toosmall):
-        print ('%s group(s) had less than %s %% the total number of '
-               +'particles and were removed.') % (sum(toosmall), threshold*100)
+        print(('%s group(s) had less than %s %% the total number of '
+               +'particles and were removed.') % (sum(toosmall), threshold*100))
         indices = np.arange(sorted_pcls.shape[1])
         remainder = indices[np.sum(groups[toosmall], axis = 0, dtype = bool)]
         #set unallocated particle group id to len(groups) + 1
@@ -1020,7 +1023,7 @@ def make_non_overlapping_pcl_models(sorted_pcls, box_size, out_dir,
         #--> unused indices
     else:
         remainder = False
-    print 'Number of non-overlapping models ' + str(len(groups))
+    print('Number of non-overlapping models ' + str(len(groups)))
     
     pcl_ids = []
     outmods = []
@@ -1067,12 +1070,13 @@ def mult_mask(lamella_mask_path, out_mask):
 
 def reproject_volume(tomo, ali, tlt, thickness, out_tomo,
                      add_tilt_params = False):
-    str_tilt_angles = [str(x.strip('\n\r ')) for x in open(tlt)]
+    str_tilt_angles = [str(x.strip('\n\r').strip(' ')) for x in open(tlt)]
     tilt_str = [
                 ('tilt -REPROJECT %s -recfile %s -inp %s -TILTFILE %s' + 
                 ' -THICKNESS %s -output %s') % ((',').join(str_tilt_angles),
                                         tomo, ali, tlt, thickness, out_tomo)
                 ]
+    print(tilt_str)                                            
     if not isinstance(add_tilt_params, bool):
         for y in range(len(add_tilt_params)):
             tilt_str.append(add_tilt_params[y])
@@ -1127,9 +1131,9 @@ def format_nonoverlapping_alis(out_dir, base_name, average_map, tomo, ali, tlt,
         average_size = np.array(np.array(average_size, dtype = 'float16')
         * average_volume_binning, dtype = 'int16')
     if np.round(average_apix, decimals = 1) != np.round(apix, decimals = 1):
-        print ('WARNING:\n Average map pixel size does not match input ' + 
-                ' tomogram pixel size: %s %s!' % (average_apix, apix))
-    print 'Using average map size to generate non overlapping models.'
+        print(('WARNING:\n Average map pixel size does not match input ' + 
+                ' tomogram pixel size: %s %s!' % (average_apix, apix)))
+    print('Using average map size to generate non overlapping models.')
     
 
     #generate non-overlapping models    
@@ -1282,7 +1286,7 @@ def chunk_non_overlapping_alis(average_map, csv_file, pmodel, group_path,
     average_map = MapParser_f32_new.MapParser.readMRC(average_map) 
     csv_file = PEETMotiveList(csv_file)
 
-    print 'Backplotting.'
+    print('Backplotting.')
     pmodel = PEETmodel(pmodel).get_all_points()    
     #make plotbacks
     #LOOPING IS INTENTIONAL in case there are multiple tomos as input.
@@ -1293,7 +1297,7 @@ def chunk_non_overlapping_alis(average_map, csv_file, pmodel, group_path,
                       plotback_list[a], apix, groups[a], pmodel_bin, 
                       average_volume_binning, True)
         
-    print 'Reprojecting backplots.'
+    print('Reprojecting backplots.')
     if lamella_mask_path:
         for a in range(len(groups)):
             mask_and_reproject(out_dir, base_name, lamella_mask_path,
@@ -1305,7 +1309,7 @@ def chunk_non_overlapping_alis(average_map, csv_file, pmodel, group_path,
             reproject_volume(plotback_list[a], ali, tlt, tomo_size[2], 
                              plotback_ali_list[a], var_str)    
 
-    print 'Generating tomogram masks.'
+    print('Generating tomogram masks.')
     for a in range(len(groups)):
         NEW_mask_from_plotback(plotback_list[a], out_mask_list[a],
             grey_dilation_level, False, False, smooth_mask_list[a])
@@ -1315,7 +1319,7 @@ def chunk_non_overlapping_alis(average_map, csv_file, pmodel, group_path,
         for a in range(len(groups)):
             mult_mask(lamella_mask_path, smooth_mask_list[a])
         
-    print 'Reprojecting masked tomos.'
+    print('Reprojecting masked tomos.')
     for a in range(len(groups)):
         mask_and_reproject(out_dir, base_name, smooth_mask_list[a], tomo, 
                            masked_tomo_list[a], sub_ali_list[a],
@@ -1358,7 +1362,6 @@ def extract_2d_simplified(stack, sorted_pcls, box_size, excludelist = False,
 
     Returns extracted particles [numpy array [particle, tilt number, [X,Y]]]
         """
-
     def get_2d_offset(pcl):
         return pcl - round(pcl)
     
@@ -1371,11 +1374,11 @@ def extract_2d_simplified(stack, sorted_pcls, box_size, excludelist = False,
         #etomo comfiles have excludelist numbered from 1. 
         excludelist = np.array(excludelist) - 1
         #remove tilts based on excludelist
-        exc_mask = np.isin(range(len(mrc)), excludelist, invert = True)
+        exc_mask = np.isin(list(range(len(mrc))), excludelist, invert = True)
         mrc = mrc[exc_mask]
         sorted_pcls = sorted_pcls[exc_mask]
-    
-    stack_size = np.flip(np.array([x for x in mrc.shape]), 0) #xyz
+
+    stack_size = np.flip(mrc.shape)
     
     if np.squeeze(sorted_pcls).ndim == 2:
         sorted_pcls = np.squeeze(sorted_pcls)
@@ -1514,13 +1517,13 @@ def dose_list(ali, zerotlt, dose, orderL, dosesym = False,
     if not dosesym:
         #from zerotlt to zero
         if orderL:
-            doselist = (np.array(range(zerotlt - 1, -1, -1)
-                            + range(zerotlt, len(ali))) * dose)
+            doselist = (np.array(list(range(zerotlt - 1, -1, -1))
+                            + list(range(zerotlt, len(ali)))) * dose)
         ##from zerotlt to max
         else:
             doselist = np.array(
-                    range(len(ali) - 1, len(ali) - zerotlt - 2, -1)
-                    + range(len(ali) - zerotlt - 1))
+                    list(range(len(ali) - 1, len(ali) - zerotlt - 2, -1))
+                    + list(range(len(ali) - zerotlt - 1)))
     else:
         order = np.zeros((len(ali)), dtype = 'int16')
         order[0] = int(zerotlt - 1)
@@ -1645,7 +1648,7 @@ def convert_ctffind_to_defocus(defocus_file, base_name, rec_dir, out_dir):
     defocus.reverse()
     defocus2.reverse()
     angles.reverse()
-    order=range(1,(len(tilt_angles)+1))
+    order=list(range(1,(len(tilt_angles)+1)))
     order.reverse()
     out_defocus_file = os.path.abspath(os.path.join(out_dir, str(base_name) +
                                                     '.defocus'))
@@ -1708,7 +1711,7 @@ def get_pcl_defoci(base_name, tlt, rec_dir, out_dir, sorted_pcls, ali,
         return df[exc_mask]
 
    
-    tilt_angles = [float(x.strip('\n\r')) for x in open(tlt)]
+    tilt_angles = [float(x.strip('\n\r').strip(' ')) for x in open(tlt)]
     stack_size = np.array(MapParser_f32_new.MapParser.readMRCHeader(ali)[:3])
     df = read_defocus_file(defocus_file, base_name, rec_dir, out_dir)    
     if not isinstance(excludelist, bool): 
@@ -1719,7 +1722,7 @@ def get_pcl_defoci(base_name, tlt, rec_dir, out_dir, sorted_pcls, ali,
         #etomo comfiles have excludelist numbered from 1. 
         excludelist = np.array(excludelist) - 1
         #remove tilts based on excludelist
-        exc_mask = np.isin(range(stack_size[2]), excludelist, invert = True)
+        exc_mask = np.isin(list(range(stack_size[2])), excludelist, invert = True)
         sorted_pcls = sorted_pcls[exc_mask]
         tilt_angles = np.array(tilt_angles)[exc_mask]
         
@@ -1736,7 +1739,7 @@ def get_pcl_defoci(base_name, tlt, rec_dir, out_dir, sorted_pcls, ali,
         all_defoci[:, x] = meandf - dst
 
     if verbose:
-        print 'REPLACE BY A PLOT??'
+        print('REPLACE BY A PLOT??')
 # =============================================================================
 #         print 'len(tilt angles) = %s' % len(tilt_angles)
 #         print 'model.shape = %s' % str(model.shape)
@@ -2060,7 +2063,7 @@ def cc_walk(pcl_n, ccmaps, shifts, interp, limit, top, bot, direction, step,
             except:
                 wmsg = ["Failed to find weighting function ratio." +
                         " Particle %s tilt %s" % (pcl_n, x)]
-                print wmsg
+                print(wmsg)
                 warnings.extend(wmsg)   
         if debug > 1:
             pk, val, warn = buggy_peaks(ccmaps[x])
@@ -2255,10 +2258,10 @@ def plot_shifts(shifts, out_dir):
     mean_shiftsx = [np.mean(shifts[:,x,0]) for x in range(shifts.shape[1])]
     mean_shiftsy = [np.mean(shifts[:,x,1]) for x in range(shifts.shape[1])]
     f, axes = plt.subplots(1,2, sharey = False)
-    axes[0].errorbar(range(shifts.shape[1]), mean_shiftsx, yerr = std_shiftsx)
+    axes[0].errorbar(list(range(shifts.shape[1])), mean_shiftsx, yerr = std_shiftsx)
     axes[0].title.set_text('X axis')    
     axes[0].set(xlabel = 'Tilt number', ylabel = 'shift [pixels]')
-    axes[1].errorbar(range(shifts.shape[1]), mean_shiftsy, yerr = std_shiftsy)
+    axes[1].errorbar(list(range(shifts.shape[1])), mean_shiftsy, yerr = std_shiftsy)
     axes[1].set(xlabel = 'Tilt number')
     axes[1].title.set_text('Y axis')    
     
@@ -2270,10 +2273,10 @@ def plot_shifts(shifts, out_dir):
     mean_shiftsx = [np.mean(shifts[0,x,0]) for x in range(shifts.shape[1])]
     mean_shiftsy = [np.mean(shifts[0,x,1]) for x in range(shifts.shape[1])]
     f, axes = plt.subplots(1,2, sharey = False)
-    axes[0].errorbar(range(shifts.shape[1]), mean_shiftsx, yerr = std_shiftsx)
+    axes[0].errorbar(list(range(shifts.shape[1])), mean_shiftsx, yerr = std_shiftsx)
     axes[0].title.set_text('X axis')    
     axes[0].set(xlabel = 'Tilt number', ylabel = 'shift [pixels]')
-    axes[1].errorbar(range(shifts.shape[1]), mean_shiftsy, yerr = std_shiftsy)
+    axes[1].errorbar(list(range(shifts.shape[1])), mean_shiftsy, yerr = std_shiftsy)
     axes[1].set(xlabel = 'Tilt number')
     axes[1].title.set_text('Y axis')    
 
@@ -2367,7 +2370,7 @@ def p_shifts_to_model_points(ssorted_pcls, sorted_shifts, out_dir,
     #trim rsorted_pcls using excludelist (shifts should already be cleaned)
     if not isinstance(excludelist, bool):
         excludelist = np.array(excludelist) - 1
-        exc_mask = np.isin(range(len(ssorted_pcls)), excludelist,
+        exc_mask = np.isin(list(range(len(ssorted_pcls))), excludelist,
                            invert = True)
         ssorted_pcls = ssorted_pcls[exc_mask]
 
@@ -2495,7 +2498,7 @@ def format_align(out_dir, base_name, ali, tlt, binning, fid_model,
         os.rename(tlt, fidtlt)
 #        if os.path.isfile(fidtlt):
 #            tlt = fidtlt
-    tilt_angles = [float(x.strip('\n\r')) for x in open(tlt)]
+    tilt_angles = [float(x.strip('\n\r').strip(' ')) for x in open(tlt)]
     zero_tlt = find_nearest(tilt_angles, 0)
 
     #rotation is zero if aligned stack is used
@@ -2568,7 +2571,7 @@ def format_align(out_dir, base_name, ali, tlt, binning, fid_model,
             if globalXYZ:
                 f.write('\nFixXYZCoordinates\t1')
             else:
-                print 'global xyz coordinates can be relaxed in the last iteration'
+                print('global xyz coordinates can be relaxed in the last iteration')
                 f.write('\nFixXYZCoordinates\t0')
             f.write('\nLocalOutputOptions\t1,0,1')
             f.write('\nLocalRotOption\t3')
@@ -2622,7 +2625,7 @@ def format_newst(base_name, out_dir, st, xf, binning,
         f.write('\nOffsetsInXandY\t0.0,0.0')
 #        if excludelist:
 #            f.write('\nExcludeSections\t%s' % (',').join(str(x) for x in excludelist))
-        print 'Newst binning %s' % binning
+        print('Newst binning %s' % binning)
         f.write('\nBinByFactor\t%s' % int(binning))
         f.write('\nAntialiasFilter\t-1')
         #f.write('\n$if (-e ./savework) ./savework')
@@ -2834,7 +2837,7 @@ def get_tomo_transform(ref, query, angrange, transform = 'rotation',
         mysh = np.median(ysh, axis = 0) 
         #xy X shift is much better than xz X shift
         mysh[0] = xsh[0]
-        print 'xy shift, xz shift %s %s' % (str(xsh), str(mysh))
+        print('xy shift, xz shift %s %s' % (str(xsh), str(mysh)))
         if out_dir:
 
             write_mrc(join(out_dir, 'matchref_ystrips.mrc'), oxz)
@@ -2922,8 +2925,7 @@ def match_tomos(tomo_binning, out_dir, base_name, rec_dir, how_tiny, tomo_size,
     size_match = np.subtract(tiny_size, tiny_orig_size) != (0,  0, 0)
     if np.any(size_match):
         if np.any(size_match > 2):
-            raise(ValueError('Tiny tomogram sizes do not match %s %s' % 
-                             (tiny_orig_size, tiny_size)))
+            raise ValueError
         else:
             tiny_size = tiny_orig_size  
     #read into memory and rotate around x
@@ -2950,9 +2952,12 @@ def match_tomos(tomo_binning, out_dir, base_name, rec_dir, how_tiny, tomo_size,
     
     gshift = get_tomo_transform(ref, query, angrange, 'translation', how_tiny,
                                 out_dir)
+    print(fp[9])
+    print (gshift*tomo_binning)
+    
     SHIFT = fp[9] - gshift*tomo_binning
 
-    print 'first round offset, xtilt, shift %s %s %s' % (OFFSET, global_xtilt, SHIFT)
+    print('first round offset, xtilt, shift %s %s %s' % (OFFSET, global_xtilt, SHIFT))
 
     #check rotation and shift again
     format_tilt(base_name, out_dir, bin_flexo_ali, fp[3], out_bin, op[4],
@@ -2971,13 +2976,13 @@ def match_tomos(tomo_binning, out_dir, base_name, rec_dir, how_tiny, tomo_size,
     gshift = get_tomo_transform(ref, query, angrange, 'translation', how_tiny,
                                 out_dir)
     SHIFT = SHIFT - gshift*tomo_binning 
-    print 'second round offset, xtilt, shift %s %s %s' % (OFFSET, global_xtilt, SHIFT)
+    print('second round offset, xtilt, shift %s %s %s' % (OFFSET, global_xtilt, SHIFT))
 
     
-    print 'Calculated shift at bin %s: X %s, Z %s' % (out_bin, SHIFT[0]/out_bin,
-                                           SHIFT[1]/out_bin)
-    print 'Calculated tilt angle and xtilt offset %s, %s' % (
-                                            add_yrot, add_xtilt)
+    print('Calculated shift at bin %s: X %s, Z %s' % (out_bin, SHIFT[0]/out_bin,
+                                           SHIFT[1]/out_bin))
+    print('Calculated tilt angle and xtilt offset %s, %s' % (
+                                            add_yrot, add_xtilt))
     
     return SHIFT, OFFSET, global_xtilt
 
@@ -3007,7 +3012,7 @@ def imodscript(comfile, abspath):
     
     sys.path.append(abspath)  #adds folder to path, can then execute python script as usual
     os.chdir(abspath)
-    execfile(str(abspath)+'/'+str(comfile)+'.py')
+    exec(compile(open(str(abspath)+'/'+str(comfile)+'.py').read(), str(abspath)+'/'+str(comfile)+'.py', 'exec'))
     os.chdir(pwd)
     sys.path.pop(-1) #removes last path entry
 
@@ -3043,7 +3048,7 @@ def kill_process(process, log = False, wait = 10, sig = signal.SIGTERM):
     try:
         pgid = os.getpgid(process.pid)
         os.killpg(pgid, sig)   
-        print('\nKilling processchunks group PID %s.' % pgid)
+        print(('\nKilling processchunks group PID %s.' % pgid))
         if log:
             com = process.communicate()
             write_to_log(log, com[0] + '\n' + com[1] + 
@@ -3052,16 +3057,16 @@ def kill_process(process, log = False, wait = 10, sig = signal.SIGTERM):
     #os.getpgid should return OSError if group doesnt exist (e.g. single PID)
         try:
             os.kill(process.pid, sig)
-            print('\nKilling processchunks PID %s.' % pgid)
+            print(('\nKilling processchunks PID %s.' % pgid))
             if log:
                 com = process.communicate()
                 write_to_log(log, com[0] + '\n' + com[1] + 
                     'run_split_peet: Terminating PID %s\n' % process.pid)  
         except:
-            print('Unable to terminate process %s: No such process.'
-                  % process.pid)
+            print(('Unable to terminate process %s: No such process.'
+                  % process.pid))
     except:
-        print 'killpg: Unhandled Exception.'
+        print('killpg: Unhandled Exception.')
         raise
     
 
@@ -3104,18 +3109,18 @@ def run_generic_process(cmd, out_log = False, wait = True):
                 raise ValueError(('run_generic_process: Process returned' +
                                  ' non-zero status.  See %s') % out_log)
         else:
-            print ('run_generic_process: WARNING: ' +
-                   'Child process errors will not be caught.')
+            print(('run_generic_process: WARNING: ' +
+                   'Child process errors will not be caught.'))
     except ValueError:
         raise
     except KeyboardInterrupt:
         kill_process(process, out_log)      
         raise
     except:
-        print 'run_generic_process: Unhandled Exception.'
+        print('run_generic_process: Unhandled Exception.')
         kill_process(process)
         com = process.communicate()
-        print com[0] + '\n' + com[1]
+        print(com[0] + '\n' + com[1])
         raise
 
 def run_processchunks(base_name, out_dir, machines, log = False):   
@@ -3187,8 +3192,8 @@ def run_split_peet(base_name, out_dir, base_name2, out_dir2, machines,
     if not isinstance(machines, list):
         machines = [machines]
     if len(machines) < 2:
-        print ('run_split_peet: Warning: Only one machine specified. '+
-               'Both processchunks will be sent to the same core.')
+        print(('run_split_peet: Warning: Only one machine specified. '+
+               'Both processchunks will be sent to the same core.'))
         m1 = m2 = machines
     else:
         m1 = machines[:len(machines)/2]
@@ -3224,8 +3229,7 @@ def run_split_peet(base_name, out_dir, base_name2, out_dir2, machines,
           
         total_chunks1, total_chunks2 = 0, 0
         chunks_done1, chunks_done2 = 0, 0
-        from itertools import izip_longest
-        for output1, output2 in izip_longest(
+        for output1, output2 in zip_longest(
                         iter(process.stdout.readline, ''),
                         iter(process2.stdout.readline, '')):
             advance_bar = False
@@ -3275,7 +3279,7 @@ def run_split_peet(base_name, out_dir, base_name2, out_dir2, machines,
                 or (process2.poll() == 0 and chunks_done2 != total_chunks2)
                 or (process2.poll() == 0 and chunks_done2 == 0)):
                     com = process2.communicate()
-                    print '#############%s' % str(com)                
+                    print('#############%s' % str(com))                
                     write_to_log(c_log2, 
                                  'Processchunks status %s' % process2.poll())
                     write_to_log(c_log2, panic_msg)
@@ -3296,7 +3300,7 @@ def run_split_peet(base_name, out_dir, base_name2, out_dir2, machines,
         kill_process(process2, log = c_log2)        
         raise
     except:
-        print 'run_split_peet: Unhandled Exception.'
+        print('run_split_peet: Unhandled Exception.')
         kill_process(process, log = c_log1)
         kill_process(process2, log = c_log2)    
         raise
@@ -3314,6 +3318,7 @@ def in_plane_rotation(ref, query, angrange, out_dir, limit = 20, interp = 1,
     angrange should be even
     subdegree in single decimals
     """
+        
     if angrange%2 != 0:
         angrange += 1
     mat = np.zeros((angrange+1))
@@ -3330,9 +3335,12 @@ def in_plane_rotation(ref, query, angrange, out_dir, limit = 20, interp = 1,
     pkpos, pkh = find_peaks(mat, np.min(mat))
     pkh = pkh['peak_heights']
 #    print pkpos
-    bestphi = pkpos[np.where(pkh == pkh.max())]
-    #bestphi = np.max(find_peaks(mat, np.min(mat))[0])
-    bestphi -= angrange/2
+    if pkh.size == 0:
+        bestphi = 0
+    else:
+        bestphi = pkpos[np.where(pkh == pkh.max())]
+        #bestphi = np.max(find_peaks(mat, np.min(mat))[0])
+        bestphi -= angrange/2
     
     if verbose:
         edge = int(np.round(np.sqrt(angrange+1), decimals = 0))
@@ -3359,7 +3367,7 @@ def in_plane_rotation(ref, query, angrange, out_dir, limit = 20, interp = 1,
         plt.close()
         f, axes = plt.subplots()
         axes.plot(mat)
-        plt.xticks(range(len(angles)), angles)
+        plt.xticks(list(range(len(angles))), angles)
         #space out xticks.  From stackoverflow # 6682784
         for n, label in enumerate(axes.xaxis.get_ticklabels()):
             if n % 2 != 0:
@@ -3391,9 +3399,13 @@ def in_plane_rotation(ref, query, angrange, out_dir, limit = 20, interp = 1,
 #        plt.plot(mat)
         pkpos, pkh = find_peaks(mat, np.min(mat))
         pkh = pkh['peak_heights']
-    #    print pkpos
         
-        bestphi = angles[pkpos[np.where(pkh == pkh.max())]]
+        #this shouldn't happen, but in case there are no peaks
+        #(probably blank image), return no rotation
+        if pkh.size == 0:
+            bestphi = angles[int(len(angles)/2)]
+        else:
+            bestphi = angles[pkpos[np.where(pkh == pkh.max())]]
         #bestphi = np.max(find_peaks(mat, np.min(mat))[0])
      
         
@@ -3452,7 +3464,7 @@ def deal_with_excludelist(ali, tlt, defocus_file, xf, excludelist,
     #defocus file
     if defocus_file:
         new_defocus_file = join(out_dir, base_name + '_excludelist.defocus')
-        ex_bool = np.isin(np.array(range(len(tilt_angles))), np.array(excludelist),
+        ex_bool = np.isin(np.array(list(range(len(tilt_angles)))), np.array(excludelist),
                           invert = True)
         with open(defocus_file, 'r') as ff:
             first_line = ff.readlines()[0]
@@ -3474,8 +3486,8 @@ def deal_with_excludelist(ali, tlt, defocus_file, xf, excludelist,
         else:
             df=[]
             #read defocus file (etomo astigmatism format)
-            print 'STILL UNTESTED!!!!'
-            print '!!!!!!!!!!!!!!!!!!!'
+            print('STILL UNTESTED!!!!')
+            print('!!!!!!!!!!!!!!!!!!!')
             with open(defocus_file, 'r') as f:
                 df = f.readlines()
                 fl = df.pop(0) #pop
@@ -3551,7 +3563,7 @@ def orthogonal_tilts(tlt, n_orth = 6, d_orth = 90, excludelist = False,
     if not isinstance(excludelist, bool):
         excludelist = np.array(excludelist) - 1
         #remove tilts based on excludelist
-        exc_mask = np.isin(range(len(tilt_angles)), excludelist, invert = True)
+        exc_mask = np.isin(list(range(len(tilt_angles))), excludelist, invert = True)
         tilt_angles = np.array(tilt_angles)[exc_mask]
 
     #the following code picks {n_orth} angles AROUND the orthogonal tilt 
@@ -3595,7 +3607,7 @@ def orthogonal_tilts(tlt, n_orth = 6, d_orth = 90, excludelist = False,
         else:
             orth_ind = o[q - n_orth/2 - n_orth%2 + 1:q + n_orth/2 + 1]
         orth_ind = np.hstack((orth_ind, x))
-        orth_mask = np.isin(range(len(tilt_angles)), orth_ind)
+        orth_mask = np.isin(list(range(len(tilt_angles))), orth_ind)
         angset.append(tilt_angles[orth_mask])
         mask.append(orth_mask)
 
@@ -3632,7 +3644,7 @@ def rec_orth_tomos(
 
 
 #    startTime = time.time()  
-    tilt_angles = [float(x.strip('\n\r')) for x in open(tlt)]
+    tilt_angles = [float(x.strip('\n\r').strip(' ')) for x in open(tlt)]
         
     trd = join(out_dir, 'orthogonal_rec')
     if not os.path.isdir(trd):
@@ -3644,7 +3656,7 @@ def rec_orth_tomos(
     if not isinstance(excludelist, bool):
         excludelist = np.array(excludelist) - 1
         #remove tilts based on excludelist
-        gem = np.isin(range(len(tilt_angles)), excludelist, invert = True)
+        gem = np.isin(list(range(len(tilt_angles))), excludelist, invert = True)
     else:
         gem = np.ones(len(tilt_angles), dtype = bool)
 
@@ -3816,12 +3828,24 @@ def reconstruct_binned_tomo(out_dir, base_name, binning, st, output_xf,
                          xfile, localxf, zfac, excludelist,
                          output_rec,
                          com_ext = com_ext) 
+    warnings.warn('ctfcorrection disabled!')
+    
+    
+    
+    
+    
+    
     ctf_ali = format_ctfcorr(output_ali, output_tlt, output_xf, 
                              defocus_file, out_dir, base_name, V, Cs, ampC, 
                              apix,
                              deftol,
                              #to be added to inputs:
                              interp_w)
+    ctf_ali = output_ali
+        
+        
+        
+        
     #make ts
     imodscript('newst_bin%s.com' % int(binning), os.path.realpath(out_dir))
     #ctfcorrect
@@ -3966,14 +3990,14 @@ def prepare_prm(prm, ite, tom_n, out_dir, base_name, st, new_prm_dir,
     else:
         if isinstance(tom_n, int):
             if tom_n == 0:
-                print ('prepare_prm: Tomograms for FSC are numbered from 1! '
-                       + 'Using tomogram no. 1')
+                print(('prepare_prm: Tomograms for FSC are numbered from 1! '
+                       + 'Using tomogram no. 1'))
                 tom_n = [tom_n]
             tom_n = [tom_n - 1]
         else:
             if tom_n[0] == 0:
-                print ('prepare_prm: Zero found for tomogram number. '
-                       + 'Assuming entered numbering is from zero, not 1.')
+                print(('prepare_prm: Zero found for tomogram number. '
+                       + 'Assuming entered numbering is from zero, not 1.'))
                 tom_n = np.array(tom_n)
             else:                
                 tom_n = np.array(tom_n) - 1
@@ -4157,8 +4181,8 @@ def get_resolution(fsc, fshells, cutoff, apix = False, fudge_ctf = True,
         raise ValueError('get_res: multiple values where fsc == cutoff. %s'
                          % res)
     if res >= len(search_fsc) - 2:
-        print ('get_resolution: WARNING: detected resolution too close to ' +
-            'resolution at Nyquist.  Consider using smaller pixel size.')
+        print(('get_resolution: WARNING: detected resolution too close to ' +
+            'resolution at Nyquist.  Consider using smaller pixel size.'))
         
     #area under curve
     if get_area == 'cutoff':
@@ -4205,7 +4229,13 @@ def plot_fsc(peet_dirs, out_dir, cutoff = 0.143, apix = False,
         with open(fshells[x], 'r') as f:
             ar_fshells = np.array(f.read().strip('\n\r').split(), dtype = float)
         with open(fsc[x], 'r') as f:
-            ar_fsc = np.array(f.read().strip('\n\r').split(), dtype = float)
+            ar_fsc = np.array(f.read().strip('\n\r').split())
+            if ar_fsc[ar_fsc != 'NaN'].size == 0:
+                warnings.warn('FSC determination failed.')
+                return False
+            else:
+                ar_fsc = np.array(ar_fsc, dtype = float)
+        
         axs.plot(ar_fshells, ar_fsc, label = x + 1)
         c_res = get_resolution(ar_fsc, ar_fshells, cutoff = cutoff,
                                apix = apix, get_area = get_area)
@@ -4394,7 +4424,8 @@ def p_extract_and_cc(
         xf = False,
         orthogonal_subtraction = False,
         n_peaks = 100,
-        ccmap_filter = 800
+        ccmap_filter = 800,
+        no_ctf_convolution = False
         ):
     """
     alis [str or list of str] query image file(s)
@@ -4543,11 +4574,14 @@ def p_extract_and_cc(
         apix = get_apix_and_size(alis[0])[0]
     wl = (12.2639/(V+((0.00000097845)*(V**2)))**0.5)
 
-    tilt_angles = [float(x.strip('\n\r')) for x in open(tlt)]
+    tilt_angles = [float(x.strip('\n\r').strip(' ')) for x in open(tlt)]
     #VP 13/06/2020 using plotback instead of subtracted stack as input for 
     #get_pcl_defoci to avoid issues with excludelist when using
     #orthogonal subtraction
-    defoci = get_pcl_defoci(False, tlt, False, out_dir, rsorted_pcls,
+    if no_ctf_convolution:
+        defoci = np.zeros((len(tilt_angles), rsorted_pcls.shape[1]))
+    else:
+        defoci = get_pcl_defoci(False, tlt, False, out_dir, rsorted_pcls,
                 plotbacks[0], apix, defocus_file, excludelist, verbose = False,
                 )     
     
@@ -4567,7 +4601,7 @@ def p_extract_and_cc(
         #excludelist is numbered from one, fix:
         excludelist = np.array(excludelist) - 1
         excludelist_mask = np.isin(
-                range(rsorted_pcls.shape[0]), excludelist, invert = True)    
+                list(range(rsorted_pcls.shape[0])), excludelist, invert = True)    
         rsorted_pcls = rsorted_pcls[excludelist_mask]
         for x in range(len(alis)):
             if not orthogonal_subtraction:
@@ -4602,7 +4636,7 @@ def p_extract_and_cc(
             #if not os.path.isfile(testpcl):
             write_mrc(testpcl, query)
             write_mrc(testref, ref)
-    
+        
         ref = ctf_convolve_andor_dosefilter_wrapper(ref, zero_tlt, dose,
                 apix, V, Cs, wl, ampC, ps, defoci[:, x], butter_order, dosesym,
                 orderL, pre_exposure)
@@ -4685,7 +4719,7 @@ def shifts_by_cc(pcl_n, ref, query, limit, interp, tilt_angles,
     swapped to XY at the end.
     """
     if not log and debug > 0:
-        print 'cc_but_better: No log file specified, logging disabled.'
+        print('cc_but_better: No log file specified, logging disabled.')
         debug = 0
         
     debug_out = []
@@ -4844,7 +4878,7 @@ def cc_middle(pcl_n, ref, query, tilt_angles, ccmaps, interp, limit, map_size,
             if debug < 2:
                 pk, val, warn = buggy_peaks(ccmap)
             elif debug > 1:           
-                print "this breaks is there are no nice peaks"
+                print("this breaks is there are no nice peaks")
                 #first, plot unbiased ccmaps[x]
                 pk, val, warn = buggy_peaks(ccmaps[x])
                 axs[0, x-bot].imshow(ccmaps[x], cmap = 'Greys')
@@ -4951,7 +4985,7 @@ class extracted_particles:
         #pcl_ids are original pcl indices (prior to removing group outliers)
         if isinstance(self.tilt_angles, str):
             #tilt angles can be specified as path to .tlt
-            self.tilt_angles = np.array([float(x.strip('\n\r'))
+            self.tilt_angles = np.array([float(x.strip('\n\r').strip(' '))
                                 for x in open(self.tilt_angles)])
 
     def remove_tilts_using_excludelist(self, excludelist = []):
@@ -4989,11 +5023,11 @@ class extracted_particles:
             else:
                 gmask = np.sum(self.groups, axis = 0, dtype = bool)
                 #gmask has len(particles) - len(excludelist)
-            #this removes outliers from self.groups, meaning that this can be
-            #executed multiple times safely.
-            #But it does not protect from re-reading groups
-            #--> introduced flg_outliers_removed
-            self.groups = self.groups[:, gmask]
+                #this removes outliers from self.groups, meaning that this can be
+                #executed multiple times safely.
+                #But it does not protect from re-reading groups
+                #--> introduced flg_outliers_removed
+                self.groups = self.groups[:, gmask]
             self.sorted_pcls = self.sorted_pcls[:, gmask]
             self.update_indices()
             if not isinstance(self.model_3d, bool):
@@ -5046,7 +5080,8 @@ class extracted_particles:
             if self.out_dir and self.chunk_base:
                 tmp_path = realpath(
                         join(self.out_dir, 'cc_peaks', self.chunk_base
-                             + '-%03d_%s.npy' % (self.pcl_ids[x], name_ext)))
+                             + '-%0*d_%s.npy' % (len(str(self.num_pcls)),
+                                                 self.pcl_ids[x], name_ext)))
             elif isinstance(spec_path, tuple):
                 tmp_path = spec_path[x]
             else:
@@ -5221,7 +5256,7 @@ class extracted_particles:
                 masked_shift = self.shifts[:, pcl_index, :, axis][
                                         self.shift_mask[:, pcl_index, :, axis]]
                 ax[axis].scatter(xvals, masked_shift, c = 'tab:orange',
-                  label = 'max scoring shfit')  
+                  label = 'max scoring shift')  
                 ax[axis].plot(xvals, masked_shift, c = 'tab:orange')
                   
                 ax[axis].legend()
@@ -5249,9 +5284,10 @@ class extracted_particles:
         tree = KDTree(self.model_3d)
         dst, pos = tree.query(self.model_3d,
                               self.num_pcls)
-        #set minimum number of neighbours to 2
+
+    #set minimum number of neighbours to 2
         for x in range(len(dst)):
-            farenuf = np.where(dst[x] >= neighbour_distance)[0][0]
+            farenuf = np.where(dst[x] >= min(neighbour_distance, np.max(dst[x])))[0][0]
             dst[x][max(3, farenuf):] = np.inf
             pos[x][max(3, farenuf):] = dst.shape[0] + 1
 
@@ -5539,8 +5575,8 @@ class extracted_particles:
                                               accepted_classes)
         accepted_mask = accepted_mask.reshape(acc_shape)
         if not isinstance(gap_mask, bool):
-            print gap_mask.shape
-            print accepted_mask.shape
+            print(gap_mask.shape)
+            print(accepted_mask.shape)
             accepted_mask = np.logical_and(gap_mask, accepted_mask)
         self.shift_mask = self.dst_mat_to_shift_mask(accepted_mask,
                                                      pcl_mask = pcl_mask)
@@ -5982,11 +6018,11 @@ class extracted_particles:
         pmin = np.min(self.cc_values[:, :, 0], axis = 0)[order]
         pmax = np.max(self.cc_values[:, :, 0], axis = 0)[order]
         xvals = np.array(self.pcl_ids, dtype = int)[order]
-        ax.plot(range(len(xvals)), peak_median, color = 'midnightblue',
+        ax.plot(list(range(len(xvals))), peak_median, color = 'midnightblue',
                 label = 'median')
-        ax.fill_between(range(len(xvals)), pmax, pmin,
+        ax.fill_between(list(range(len(xvals))), pmax, pmin,
                         color = 'lightsteelblue', label = 'max/min')
-        ax.fill_between(range(len(xvals)), q25, q75,
+        ax.fill_between(list(range(len(xvals))), q25, q75,
                         color = 'cornflowerblue', label = 'quartiles')
         ax.set(xlabel = 'ordered particles', ylabel = 'CCC')
         ax.legend(loc = 'upper right')

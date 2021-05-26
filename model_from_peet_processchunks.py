@@ -73,7 +73,7 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
     wl = (12.2639/(V+((0.00000097845)*(V**2)))**0.5)
 
 
-    print 'Checking input files...'
+    print('Checking input files...')
     #VP 19/10/2020 out_tomo should probably not be defined and pas
     #out_tomo = os.path.abspath(join(out_dir, base_name + '.rec'))  
     
@@ -101,7 +101,7 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
 #        VP 19/10/2020 defocus_file is already defined this way in verify_inputs
 #        if iters_done > 1 and excludelist:    
 #            defocus_file = join(rec_dir, base_name + '.defocus')
-        print 'Starting iteration %s of %s.' % (iters_done, iters)
+        print('Starting iteration %s of %s.' % (iters_done, iters))
 #        VP 19/10/2020 st path is read from newst.com and shouldn't be defined here
 #        st = realpath(join(rec_dir, base_name + '.st'))
         new_defocus_file = join(realpath(out_dir), split(defocus_file)[1])
@@ -142,10 +142,10 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
     if np.any(var_mask):
         var_str = var_str[var_mask]
     
-    print 'var_str = %s' % var_str
+    print('var_str = %s' % var_str)
     
     if lamella_model:
-        print 'Generating lamella mask.'
+        print('Generating lamella mask.')
         lamella_mask_path = join(out_dir, 'lamella_mask.mrc')
         lame_mask(lamella_model, tomo_size, lamella_mask_path)
     else:
@@ -163,7 +163,7 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
 #                    rec_dir, out_dir, tomo, ali, model_file_binning) 
 
     #read peet model    
-    print 'Processing particle models.'
+    print('Processing particle models.')
     rsorted_pcls, reprojected_mod = rotate_model(tomo, full_tomo,
             ali, base_name, model_file, csv, rec_dir, out_dir, tlt, tomo_size,
             model_file_binning, False, var_str)     
@@ -171,7 +171,7 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
 #                range(rsorted_pcls.shape[0]), excludelist, invert = True)    
 
 
-    print 'Generating reference tilt series.'
+    print('Generating reference tilt series.')
     if not non_overlapping_pcls:  
     #fast, simple approach:
     #Makes plotback using all pcls and reproject it into a TS. 
@@ -206,7 +206,7 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
             #lamella_mask instead?
             
             
-            print 'should include the option to run mtr using only lamella mask...'
+            print('should include the option to run mtr using only lamella mask...')
             #apply mask and reproject
 #            check_output('clip multiply %s %s %s' % 
 #                (mask_path, full_tomo, masked_tomo), shell = True)
@@ -226,7 +226,7 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
         ssorted_pcls = np.dstack((rsorted_pcls,
                                   np.zeros((rsorted_pcls.shape[0],
                                             rsorted_pcls.shape[1], 2))))  
-        ssorted_pcls[:,:,3] = range(rsorted_pcls.shape[1])
+        ssorted_pcls[:,:,3] = list(range(rsorted_pcls.shape[1]))
 
         np.save(group_path, groups)
         np.save(ssorted_path, ssorted_pcls)
@@ -255,8 +255,8 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
             csv_file = PEETMotiveList(csv)
 
             for group_ids in range(len(g0)):
-                print ('Commencing orthogonal subtraction %s of %s.' 
-                       % (group_ids + 1, len(g0)))
+                print(('Commencing orthogonal subtraction %s of %s.' 
+                       % (group_ids + 1, len(g0))))
                 groups = g0[group_ids].squeeze()
                 #generate plotback
                 replace_pcles(average_map, tomo_size, csv_file, model_file,
@@ -401,9 +401,9 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
         f.write('wl = %s\n' % wl)
         #ps
 
-    print 'Flexo parameter file created: %s' % tmp_output_file
+    print('Flexo parameter file created: %s' % tmp_output_file)
     
 
-    print 'done'
+    print('done')
     
     return tmp_output_file

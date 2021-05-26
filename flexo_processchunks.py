@@ -66,7 +66,8 @@ def just_flexo(
         phimax_step = False,
         psimax_step = False,
         thetamax_step = False,
-        n_peaks = 100
+        n_peaks = 100,
+        no_ctf_convolution = False
         ):
     
     
@@ -203,6 +204,7 @@ def just_flexo(
             '>xf = "%s"' % xf,
             '>orthogonal_subtraction = %s' % orthogonal_subtraction,
             '>n_peaks = %s' % n_peaks,
+            '>no_ctf_convolution = %s' % no_ctf_convolution,
             '>p_extract_and_cc(',
             '>            sub_ali_list,',
             '>            plotback_ali_list,',
@@ -238,7 +240,8 @@ def just_flexo(
             '>            allow_large_jumps,',
             '>            xf,',
             '>            orthogonal_subtraction,',
-            '>            n_peaks',
+            '>            n_peaks,',
+            '>            no_ctf_convolution = no_ctf_convolution',
             '>            )'
             )
                       
@@ -295,13 +298,11 @@ def just_flexo(
         Try opening unwarped_particles.mod with an aligned stack.
         Go to special > bead helper > fix contours, save and try again.""")
 
-
     #make small tomogram and check for global positioning relative to original
     #tomogram (or tomogram from previous iteration)
     SHIFT, OFFSET, global_xtilt = match_tomos(tomo_binning, out_dir,
                             base_name, orig_rec_dir, spec_tiny_size,
                             tomo_size)
-
     #final align.com
     output_xf, localxf, output_tlt, zfac = format_align(out_dir, base_name,
                             ali, tlt, tomo_binning, outmod_name,
@@ -346,7 +347,7 @@ def just_flexo(
                 thetamax_step = thetamax_step)
         
         r_new_prm = PEETPRMFile(new_prm)
-        print 'Splitting current PEET run for FSC.'
+        print('Splitting current PEET run for FSC.')
         r_new_prm.split_by_classID(ite, fsc1d,
                         classes = [1], splitForFSC = True, writeprm = True)
         r_new_prm.split_by_classID(ite, fsc2d,
@@ -379,7 +380,7 @@ def just_flexo(
     rel_bin = max(peet_bin, tomo_binning)/float(min(peet_bin, tomo_binning))
     
     #always make lowest binning tomo:
-    print 'Reconstructing tomograms...'
+    print('Reconstructing tomograms...')
     output_rec, out_tomo, output_ali = reconstruct_binned_tomo(
                             out_dir, base_name, min(peet_bin, tomo_binning),
                             st, output_xf, output_tlt, thickness,
@@ -461,17 +462,17 @@ def just_flexo(
         raise Exception('prmParser failed to generate com files. %s' % prm2)
 
     #check_output('prmParser %s' % prm_base2, shell = True)
-    print 'Running PEET...'
+    print('Running PEET...')
     run_split_peet(prm_base1, fsc1d, prm_base2, fsc2d, machines)
     #calcUnbiasedFSC
     os.chdir(peet_dir)
     fsc_log = join(peet_dir, 'calcUnbiasedFSC.log')
-    print 'Running calcUnbiasedFSC...'
+    print('Running calcUnbiasedFSC...')
     run_generic_process(['calcUnbiasedFSC', prm1, prm2], out_log = fsc_log)
     #iters_done = 1 during first iteration
     peet_dirs = [split(out_dir)[0] + '/iteration_%s/peet/' % (ii + 1)
                  for ii in range(iters_done)]
-    print 'peet dirs %s' % peet_dirs
+    print('peet dirs %s' % peet_dirs)
     res = plot_fsc(peet_dirs, peet_dir, cutoff, peet_apix)
     os.chdir(cwd)
     return res

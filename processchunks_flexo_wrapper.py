@@ -25,20 +25,20 @@ parser.add_argument('--restart_from_iter', default = 1,
                     help = 'Numbered from 1')
 args = parser.parse_args()
 
-execfile(args.flexo_comfile)
+exec(compile(open(args.flexo_comfile).read(), args.flexo_comfile, 'exec'))
 
 #order to be deprecated
 try:
     float(order)
-    print 'variable "order" is no longer used'
+    print('variable "order" is no longer used')
 except:
     pass
 
 shifts_exist = args.shifts_exist
 
 if np.any(np.array(box)/2 - 1 < limit):
-    print 'Maximum shift cannot be >= box_size/2.\
-    Defaulting to maximum allowed shift.'
+    print('Maximum shift cannot be >= box_size/2.\
+    Defaulting to maximum allowed shift.')
     limit = np.array(box[0])/2 - 1
     
 try:
@@ -52,8 +52,9 @@ if use_init_ali:
     non_overlapping_pcls = False 
 if curr_iter > 1:
     #this is done specifically to get orig_tomo after restarting
-    execfile(join(out_dir, 'iteration_%s' % str(curr_iter - 1),
-                  'tmp_output/tmp_output_file.py'))
+    exec(compile(open(join(out_dir, 'iteration_%s' % str(curr_iter - 1),
+                  'tmp_output/tmp_output_file.py')).read(), join(out_dir, 'iteration_%s' % str(curr_iter - 1),
+                  'tmp_output/tmp_output_file.py'), 'exec'))
 
 for iters_done in range(curr_iter, iters + 1):
     if iters > 1:
@@ -74,7 +75,7 @@ for iters_done in range(curr_iter, iters + 1):
             globalXYZ = True
     if curr_iter == iters_done and args.just_flexo:
         startTime = time.time()
-        execfile(args.just_flexo)
+        exec(compile(open(args.just_flexo).read(), args.just_flexo, 'exec'))
     else:
         startTime = time.time()
         ffile = flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
@@ -92,7 +93,7 @@ for iters_done in range(curr_iter, iters + 1):
 #        flexo_model_from_peet will finish by running processchunks, sync file 
 #        will execute just_flexo
 
-        execfile(ffile)
+        exec(compile(open(ffile).read(), ffile, 'exec'))
     
     
     res = just_flexo(
@@ -135,36 +136,42 @@ for iters_done in range(curr_iter, iters + 1):
             search_rad = search_rad,
             phimax_step = phimax_step,
             psimax_step = psimax_step,
-            thetamax_step = thetamax_step)
+            thetamax_step = thetamax_step,
+            no_ctf_convolution = no_ctf_convolution)
     
-    print 'Iteration execution time: %s s.' % int(np.round(
-                                (time.time() - startTime ), decimals = 0))    
+    print('Iteration execution time: %s s.' % int(np.round(
+                                (time.time() - startTime ), decimals = 0)))    
     #iters_done += 1
-    print 'Iterations completed %s' % iters_done
+    print('Iterations completed %s' % iters_done)
     shifts_exist = False
     
-    if iters_done > 1:
+    if iters_done == iters:
+        print('Done.')
+    elif iters_done > 1:
 #        nfreq = np.round(res[:,2], decimals = 3)
-        r = res[:,1] 
-        if np.any(np.floor(r) == np.floor(apix*2)) or get_area:
-            areas = np.round(res[:,2], decimals = 3)
-            if not get_area:
-            #in case resolution = resolution at Nyquist, use area under FSC
-                print ('Estimated resolution too close to Nyquist. ' + 
-                       'Using area under FSC instead.')
-            print ('Areas under FSC of iterations 1-%s: %s' % 
-               (iters_done, (',').join([str(x) for x in areas])))
-            if areas[-1] <= areas[-2]:
-                print ('No apparent improvement since last iteration.'
-                       + '  Exiting...')
-                break
+        if isinstance(res, bool):
+            print('Continuing without FSC check.')
         else:
-            print ('PEET resolution estimates for iterations 1-%s: %s' % 
-                   (iters_done, (',').join([str(x) for x in r])))
-            if r[-1] >= r[-2]:
-                print ('No apparent improvement since last iteration.'
-                       + '  Exiting...')
-                break
+            r = res[:,1]
+            if np.any(np.floor(r) == np.floor(apix*2)) or get_area:
+                areas = np.round(res[:,2], decimals = 3)
+                if not get_area:
+                #in case resolution = resolution at Nyquist, use area under FSC
+                    print(('Estimated resolution too close to Nyquist. ' + 
+                           'Using area under FSC instead.'))
+                print(('Areas under FSC of iterations 1-%s: %s' % 
+                   (iters_done, (',').join([str(x) for x in areas]))))
+                if areas[-1] <= areas[-2]:
+                    print(('No apparent improvement since last iteration.'
+                           + '  Exiting...'))
+                    break
+            else:
+                print(('PEET resolution estimates for iterations 1-%s: %s' % 
+                       (iters_done, (',').join([str(x) for x in r]))))
+                if r[-1] >= r[-2]:
+                    print(('No apparent improvement since last iteration.'
+                           + '  Exiting...'))
+                    break
 
         
     
@@ -334,6 +341,7 @@ gpr min/max scale probably needs to be tweaked based on averaging results... but
 ## Apply smoothing to fiducial contours
 #smooth = True #smooth shifts, currently doesn't do anything
 #unreasonably_harsh_filter = False
+#no_ctf_convolution = False
 #
 ######### Running parameters ########
 ## Machines for parallel processing.  Use machines = False to use localhost.  Use ['machine1']*2 + ['machine2']*2 to use 2 cores on machine1 and machine2
