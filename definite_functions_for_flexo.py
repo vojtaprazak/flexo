@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 Created on Thu Apr 11 13:23:35 2019
@@ -2793,6 +2793,9 @@ def get_tomo_transform(ref, query, angrange, transform = 'rotation',
         for x in range(len(sub_oyz)):
             xrot.append(in_plane_rotation(sub_fyz[x], sub_oyz[x], angrange,
                         out_dir, sub_oyz[x].shape[0]/2 - 1, interp, False)[0])            
+        yrot = np.array(yrot[yrot != np.nan])
+        xrot = np.array(xrot[xrot != np.nan])
+
         #remake flexo tomogram with corrected rotation
         if out_dir:
 
@@ -2810,6 +2813,7 @@ def get_tomo_transform(ref, query, angrange, transform = 'rotation',
             axes.set_ylabel('rotation [degrees]')
             f.savefig(join(out_dir, 'tomogram_rotation.png'))  
             plt.close()
+
         return np.median(yrot), np.median(xrot)
 
     elif transform == 'translation':
@@ -2952,9 +2956,6 @@ def match_tomos(tomo_binning, out_dir, base_name, rec_dir, how_tiny, tomo_size,
     
     gshift = get_tomo_transform(ref, query, angrange, 'translation', how_tiny,
                                 out_dir)
-    print(fp[9])
-    print (gshift*tomo_binning)
-    
     SHIFT = fp[9] - gshift*tomo_binning
 
     print('first round offset, xtilt, shift %s %s %s' % (OFFSET, global_xtilt, SHIFT))
@@ -3336,9 +3337,10 @@ def in_plane_rotation(ref, query, angrange, out_dir, limit = 20, interp = 1,
     pkh = pkh['peak_heights']
 #    print pkpos
     if pkh.size == 0:
-        bestphi = 0
+        bestphi = np.nan
+        subdegree = False
     else:
-        bestphi = pkpos[np.where(pkh == pkh.max())]
+        bestphi = np.array(pkpos[np.where(pkh == pkh.max())])
         #bestphi = np.max(find_peaks(mat, np.min(mat))[0])
         bestphi -= angrange/2
     
