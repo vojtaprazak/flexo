@@ -84,8 +84,8 @@ def deprecated_cc_but_better(pcl_n, ref, query, limit, interp, tilt_angles,
     if len(ref) < step:
         bot, top = 0, len(ref)
     else:
-        bot = int(zero_tilt - 1 - (step - 1)/2)
-        top = int(zero_tilt - 1 + (step - 1)/2 + 1)
+        bot = int(zero_tilt - 1 - (step - 1)//2)
+        top = int(zero_tilt - 1 + (step - 1)//2 + 1)
     
     #make stack of ccmaps
     ccmaps = np.array([(get_cc_map(ref[x], query[x], limit, interp))
@@ -202,7 +202,7 @@ def deprecated_get_cc_map(target, probe, max_dist, interp = 1,
     cc_fft = ifftshift(cc_fft)
     if interp > 1 and zoom_cc_map:
         cc_fft = zoom(cc_fft, interp)
-    edge = int((cc_fft.shape[0] - (max_dist * 2 * interp))/2) #only square iamges!!!!!!
+    edge = int((cc_fft.shape[0] - (max_dist * 2 * interp))//2) #only square iamges!!!!!!
     cc_fft = cc_fft[edge:-edge, edge:-edge]
     if outfile:
         with mrcfile.new(outfile, overwrite=True) as mrc:
@@ -1189,7 +1189,7 @@ def format_nonoverlapping_alis(out_dir, base_name, average_map, tomo, ali, tlt,
             tmp1 = []
             for y in range(len(tmp)):
                 tmp1.append((tmp[y], ()))
-            tmp1 = np.array(tmp1)
+            tmp1 = np.array(tmp1 ,dtype = object)
         c_tasks.append(tmp)
         
     #these variables have to be dealt with separately in case they are boolian
@@ -1332,18 +1332,18 @@ def pad_pcl(pcl, box_size, sorted_pcl, stack_size):
     stack coordinates with mean (of the particle)."""
     if pcl.shape[1] != (box_size[0]):
         pad = np.abs(pcl.shape[1] - box_size[0])
-        if 0 > sorted_pcl[0] - box_size[0]/2:
+        if 0 > sorted_pcl[0] - box_size[0]//2:
             pcl = np.pad(pcl, ((0, 0), (pad, 0)), 'constant',\
                          constant_values=(np.mean(pcl), np.mean(pcl)))
-        elif stack_size[0] < sorted_pcl[0] + box_size[0]/2:
+        elif stack_size[0] < sorted_pcl[0] + box_size[0]//2:
             pcl = np.pad(pcl,((0, 0), (0, pad)), 'constant',\
                          constant_values=(np.mean(pcl), np.mean(pcl)))
     if pcl.shape[0] != (box_size[1]):
         pad = np.abs(pcl.shape[0] - box_size[1])
-        if 0 > sorted_pcl[1] - box_size[1]/2:
+        if 0 > sorted_pcl[1] - box_size[1]//2:
             pcl = np.pad(pcl, ((pad, 0), (0, 0)), 'constant',\
                          constant_values=(np.mean(pcl), np.mean(pcl)))
-        elif stack_size[1] <  sorted_pcl[1] + box_size[1]/2:
+        elif stack_size[1] <  sorted_pcl[1] + box_size[1]//2:
             pcl = np.pad(pcl, ((0, pad), (0, 0)), 'constant',\
                          constant_values=(np.mean(pcl), np.mean(pcl)))
     return pcl
@@ -1398,12 +1398,12 @@ def extract_2d_simplified(stack, sorted_pcls, box_size, excludelist = False,
         all_offsets = np.zeros((sorted_pcls.shape[1], stack_size[2], 2))
     for x in range(it0):
         for y in range(sorted_pcls.shape[0]):
-            x1 = int(round(max(0, sorted_pcls[y, x, 0] - box_size[0]/2)))
+            x1 = int(round(max(0, sorted_pcls[y, x, 0] - box_size[0]//2)))
             x2 = int(round(min(
-                        stack_size[0], sorted_pcls[y, x, 0] + box_size[0]/2)))        
-            y1 = int(round(max(0, sorted_pcls[y, x, 1] - box_size[1]/2)))
+                        stack_size[0], sorted_pcls[y, x, 0] + box_size[0]//2)))        
+            y1 = int(round(max(0, sorted_pcls[y, x, 1] - box_size[1]//2)))
             y2 = int(round(min(
-                        stack_size[1], sorted_pcls[y, x, 1] + box_size[1]/2)))           
+                        stack_size[1], sorted_pcls[y, x, 1] + box_size[1]//2)))           
             if (np.array([x1,y1,x2,y2]) < 0).any():
                 raise ValueError('View %s of particle %s is completely\
                                  outside the image stack. You should rethink\
@@ -1487,7 +1487,7 @@ def dist_from_centre_map(box_size, apix):
         if box_size[d]%2 == 1:
             init_dims.append(fftshift(fftfreq(box_size[d], apix))**2)
         else:
-            f = fftshift(fftfreq(box_size[d], apix))[:box_size[d]/2]
+            f = fftshift(fftfreq(box_size[d], apix))[:box_size[d]//2]
             f = np.append(f, f[:: -1])* -1
             init_dims.append(f**2)
     return np.sqrt(init_dims[1][:,None] + init_dims[0])
@@ -1728,7 +1728,7 @@ def get_pcl_defoci(base_name, tlt, rec_dir, out_dir, sorted_pcls, ali,
         
     all_defoci = np.zeros((sorted_pcls.shape[:2]))
     sin_tlt = np.sin(np.radians(np.array(tilt_angles))) #sine of tilt angles
-    xpos = np.negative(sorted_pcls[:, :, 0] - stack_size[0]/2) * apix
+    xpos = np.negative(sorted_pcls[:, :, 0] - stack_size[0]//2) * apix
     
 #    print 'testing', sorted_pcls.shape, all_defoci.shape, meandf.shape, xpos.shape
     
@@ -1786,8 +1786,8 @@ def g2d(centre_x, centre_y, size, centre_bias):
     """
     c = centre_bias
     centre_values = (centre_y, centre_x) #Y, X
-    shift = centre_values[0] - (size/2), centre_values[1] - (size/2)
-    shift = np.array(shift)/(size/2.)
+    shift = centre_values[0] - (size//2), centre_values[1] - (size//2)
+    shift = np.array(shift)/(size//2.)
     x = np.linspace(1 + shift[0], -1 + shift[0], size)
     y = np.linspace(1 + shift[1], -1 + shift[1], size)
     xx, yy = np.meshgrid(x, y)
@@ -1801,9 +1801,9 @@ def c_mask(size, centre_y, centre_x, distance):
     """
     #EDIT VP 11/11/2020 centre_values was unused
     #centre_values = (centre_y, centre_x) #Y, X
-    shift = (size/2) - centre_y, (size/2) - centre_x
-    x = np.arange(-size/2 + shift[0], size/2 + shift[0], 1)
-    y = np.arange(-size/2 + shift[1], size/2 + shift[1], 1)
+    shift = (size//2) - centre_y, (size//2) - centre_x
+    x = np.arange(-size//2 + shift[0], size//2 + shift[0], 1)
+    y = np.arange(-size//2 + shift[1], size//2 + shift[1], 1)
     xx, yy = np.meshgrid(x,y)
     xy = np.sqrt(xx**2 + yy**2)
     mxy = xy <= distance
@@ -1826,8 +1826,8 @@ def compare_ccs(pcl_n, ref, query, top, bot, shifts, interp, limit,
     peak_tol = interp*2
     med_shift = np.median(shifts[bot:top], axis = 0) 
     #make a mask that's {maximum shift} smaller than the box
-    max_shift = np.absolute(np.max(shifts[bot:top]) - size/2)
-    new_mask = create_circular_mask(ref.shape[1:], ref.shape[1]/2 - max_shift)
+    max_shift = np.absolute(np.max(shifts[bot:top]) - size//2)
+    new_mask = create_circular_mask(ref.shape[1:], ref.shape[1]//2 - max_shift)
     shifted_query = []
     for x in range(bot, top):
         s = np.divide(shifts[x], float(interp)) - float(limit)
@@ -1924,13 +1924,13 @@ def compare_ccs(pcl_n, ref, query, top, bot, shifts, interp, limit,
 
     #check shifted cc map within 4 unbinned pixels of centre 
     #(the peak should now be centered)
-    smask = c_mask(size, size/2, size/2, peak_tol)
+    smask = c_mask(size, size//2, size//2, peak_tol)
     
     
     #m_shifted_cc = shifted_cc*smask
     m_shifted_cc = np.where(smask, shifted_cc, 0)
 
-    sbox_xy = (max(0, size/2 - peak_tol), min(size/2 + peak_tol, size))
+    sbox_xy = (max(0, size//2 - peak_tol), min(size//2 + peak_tol, size))
     sbox = m_shifted_cc[sbox_xy[0]:sbox_xy[1], sbox_xy[0]:sbox_xy[1]]
   
     #is there cc improvement within the 4 pixels of the epxected peak?
@@ -1955,7 +1955,7 @@ def compare_ccs(pcl_n, ref, query, top, bot, shifts, interp, limit,
                            marker = '+', c = 'red')
         axs[0, 0].annotate('median shift', (med_shift[1], med_shift[0]))
         axs[0, 1].imshow(shifted_cc, cmap = 'Greys')
-        axs[0, 1].add_artist(circle(size/2, size/2, peak_tol))
+        axs[0, 1].add_artist(circle(size//2, size//2, peak_tol))
         axs[0, 1].title.set_text('Shifted query CC')        
         axs[1, 0].imshow(ubox, cmap = 'Greys')
         axs[1, 0].title.set_text('Unshifted zoom')
@@ -2789,10 +2789,10 @@ def get_tomo_transform(ref, query, angrange, transform = 'rotation',
         #first check for rotation, then remake flexo tomogram 
         for x in range(len(sub_oxz)):
             yrot.append(in_plane_rotation(sub_fxz[x], sub_oxz[x], angrange,
-                        out_dir, sub_oxz[x].shape[0]/2 - 1, interp, False)[0])
+                        out_dir, sub_oxz[x].shape[0]//2 - 1, interp, False)[0])
         for x in range(len(sub_oyz)):
             xrot.append(in_plane_rotation(sub_fyz[x], sub_oyz[x], angrange,
-                        out_dir, sub_oyz[x].shape[0]/2 - 1, interp, False)[0])            
+                        out_dir, sub_oyz[x].shape[0]//2 - 1, interp, False)[0])            
         yrot = np.array(yrot[yrot != np.nan])
         xrot = np.array(xrot[xrot != np.nan])
 
@@ -2824,16 +2824,16 @@ def get_tomo_transform(ref, query, angrange, transform = 'rotation',
         fxz = make_strips(tiny_flexo, borders[0], width[0], 1, nstrips)   
         
         #get x shift from xy projection (y should not change)
-        cc = ncc(oxy, fxy, (min(oxy.shape)/2)/2 - 1, interp)    
-        xsh = (cc.shape[0]/2. - np.where((cc == cc.max()))[0],
-                   cc.shape[1]/2. - np.where((cc == cc.max()))[1])    
+        cc = ncc(oxy, fxy, (min(oxy.shape)//2)//2 - 1, interp)    
+        xsh = (cc.shape[0]//2. - np.where((cc == cc.max()))[0],
+                   cc.shape[1]//2. - np.where((cc == cc.max()))[1])    
 
         xsh = np.flip(np.squeeze(xsh), axis = 0)
         for x in range(len(oxz)):
             cc = ncc(
-                    oxz[x], fxz[x], (min(oxz[x].shape)/2)/2 - 1, interp)
+                    oxz[x], fxz[x], (min(oxz[x].shape)//2)//2 - 1, interp)
             sh = (cc.shape[0]/2. - np.where((cc == cc.max()))[0],
-                       cc.shape[1]/2. - np.where((cc == cc.max()))[1])
+                       cc.shape[1]//2. - np.where((cc == cc.max()))[1])
        
             ysh.append(sh) 
         ysh = np.flip(np.squeeze(ysh), axis = 1)
@@ -3052,8 +3052,8 @@ def kill_process(process, log = False, wait = 10, sig = signal.SIGTERM):
         print(('\nKilling processchunks group PID %s.' % pgid))
         if log:
             com = process.communicate()
-            write_to_log(log, com[0] + '\n' + com[1] + 
-                     'run_split_peet: Terminating group PID %s\n' % pgid)   
+            write_to_log(log, com[0].decode() + '\n' + com[1].decode() + 
+                     'run_split_peet: Terminating group PID %s\n' % pgid)  
     except OSError:
     #os.getpgid should return OSError if group doesnt exist (e.g. single PID)
         try:
@@ -3061,8 +3061,8 @@ def kill_process(process, log = False, wait = 10, sig = signal.SIGTERM):
             print(('\nKilling processchunks PID %s.' % pgid))
             if log:
                 com = process.communicate()
-                write_to_log(log, com[0] + '\n' + com[1] + 
-                    'run_split_peet: Terminating PID %s\n' % process.pid)  
+                write_to_log(log, com[0] + '\n'.encode() + com[1] + 
+                    'run_split_peet: Terminating PID %s\n'.encode() % process.pid)  
         except:
             print(('Unable to terminate process %s: No such process.'
                   % process.pid))
@@ -3095,7 +3095,7 @@ def run_generic_process(cmd, out_log = False, wait = True):
             for line in iter(process.stdout.readline, ''):
                 write_to_log(out_log, line.strip())
             com = process.communicate()                
-            write_to_log(out_log, com[0] + '\n' + com[1])
+            write_to_log(out_log, com[0].decode() + '\n' + com[1].decode())
 
             if process.poll() != 0:
                 raise ValueError(('run_generic_process: Process' +
@@ -3106,7 +3106,7 @@ def run_generic_process(cmd, out_log = False, wait = True):
             if p != 0:
                 out_log = realpath('run_generic_process_error.log')
                 com = process.communicate()
-                write_to_log(out_log, com[0] + '\n' + com[1])
+                write_to_log(out_log, com[0].decode() + '\n' + com[1].decode())
                 raise ValueError(('run_generic_process: Process returned' +
                                  ' non-zero status.  See %s') % out_log)
         else:
@@ -3121,7 +3121,7 @@ def run_generic_process(cmd, out_log = False, wait = True):
         print('run_generic_process: Unhandled Exception.')
         kill_process(process)
         com = process.communicate()
-        print(com[0] + '\n' + com[1])
+        print(com[0] + '\n'.encode() + com[1])
         raise
 
 def run_processchunks(base_name, out_dir, machines, log = False):   
@@ -3155,13 +3155,17 @@ def run_processchunks(base_name, out_dir, machines, log = False):
 
         total_chunks, chunks_done = 0, 0
         for line in iter(process.stdout.readline, ''):
-            write_to_log(c_log, line.strip())
-            if line.split()[3:6] == ['DONE', 'SO', 'FAR']:
-                total_chunks = int(line.split()[2])
-                chunks_done = int(line.split()[0])
-                progress_bar(total_chunks, chunks_done)
+            line = line.decode()
+            if line == '':
+                break
+            else:
+                write_to_log(c_log, line.strip())
+                if line.split()[3:6] == ['DONE', 'SO', 'FAR']:
+                    total_chunks = int(line.split()[2])
+                    chunks_done = int(line.split()[0])
+                    progress_bar(total_chunks, chunks_done)
         com = process.communicate()
-        write_to_log(c_log, com[0] + '\n' + com[1])
+        write_to_log(c_log, com[0].decode() + '\n' + com[1].decode())
         if process.poll() != 0:
             raise ValueError(('run_processchunks: Process' +
                             ' returned non-zero status.  See %s') % c_log)
@@ -3197,8 +3201,8 @@ def run_split_peet(base_name, out_dir, base_name2, out_dir2, machines,
                'Both processchunks will be sent to the same core.'))
         m1 = m2 = machines
     else:
-        m1 = machines[:len(machines)/2]
-        m2 = machines[len(machines)/2:]
+        m1 = machines[:len(machines)//2]
+        m2 = machines[len(machines)//2:]
     if not all(logs):
         c_log1 = join(out_dir, 'processchunks.out')
         c_log2 = join(out_dir2, 'processchunks.out')
@@ -3326,12 +3330,12 @@ def in_plane_rotation(ref, query, angrange, out_dir, limit = 20, interp = 1,
     ccs = []
     rot_ref = np.zeros((angrange + 1, ref.shape[0], ref.shape[1]))
 
-    for x in range(-angrange/2, angrange/2 + 1):
+    for x in range(-angrange//2, angrange//2 + 1):
         r = rotate(ref, x, (0,1), reshape = False)
-        rot_ref[x + angrange/2] = r        
+        rot_ref[x + angrange//2] = r        
         cc = ncc(query, r, limit, 1, outfile=False)   
         ccs.append(cc)
-        mat[x + angrange/2] = cc.max()
+        mat[x + angrange//2] = cc.max()
 
     pkpos, pkh = find_peaks(mat, np.min(mat))
     pkh = pkh['peak_heights']
@@ -3342,7 +3346,7 @@ def in_plane_rotation(ref, query, angrange, out_dir, limit = 20, interp = 1,
     else:
         bestphi = np.array(pkpos[np.where(pkh == pkh.max())])
         #bestphi = np.max(find_peaks(mat, np.min(mat))[0])
-        bestphi -= angrange/2
+        bestphi -= angrange//2
     
     if verbose:
         edge = int(np.round(np.sqrt(angrange+1), decimals = 0))
@@ -3354,7 +3358,7 @@ def in_plane_rotation(ref, query, angrange, out_dir, limit = 20, interp = 1,
                                    figsize = (3*edge, 3*edge + 1))
             nboxes = edge*(edge + 1)
         axes = axes.ravel()
-        angles = np.arange(-angrange/2, angrange/2 + 1)
+        angles = np.arange(-angrange//2, angrange//2 + 1)
         for x in range(angrange + 1):
             axes[x].imshow(ccs[x], cmap = "Greys")
             axes[x].title.set_text('Y rotation %s' % x)
@@ -3405,7 +3409,7 @@ def in_plane_rotation(ref, query, angrange, out_dir, limit = 20, interp = 1,
         #this shouldn't happen, but in case there are no peaks
         #(probably blank image), return no rotation
         if pkh.size == 0:
-            bestphi = angles[int(len(angles)/2)]
+            bestphi = angles[int(len(angles)//2)]
         else:
             bestphi = angles[pkpos[np.where(pkh == pkh.max())]]
         #bestphi = np.max(find_peaks(mat, np.min(mat))[0])
@@ -3573,7 +3577,7 @@ def orthogonal_tilts(tlt, n_orth = 6, d_orth = 90, excludelist = False,
     #adjust {d_orth} so that closest of the list of orthogonal angles
     #is actually {d_orth} degrees away
     diff = int(np.round(np.absolute(np.mean(np.diff(tilt_angles)))))
-    d_orth += (n_orth/2) * diff
+    d_orth += (n_orth//2) * diff
 
     #move all angles to positive range to simplify the math
     ta = tilt_angles + 90
@@ -3603,11 +3607,11 @@ def orthogonal_tilts(tlt, n_orth = 6, d_orth = 90, excludelist = False,
 
         #if the orthogonal tilt is within last {n_orth} tilts, just pick the 
         #{n_orth} most distant tilts
-        if q < n_orth/2:
+        if q < n_orth//2:
             orth_ind = o[:n_orth]
         #otherwise pick tilts on both side of the orthogonal tilt.
         else:
-            orth_ind = o[q - n_orth/2 - n_orth%2 + 1:q + n_orth/2 + 1]
+            orth_ind = o[q - n_orth//2 - n_orth%2 + 1:q + n_orth//2 + 1]
         orth_ind = np.hstack((orth_ind, x))
         orth_mask = np.isin(list(range(len(tilt_angles))), orth_ind)
         angset.append(tilt_angles[orth_mask])
@@ -4297,8 +4301,8 @@ def ncc(target, probe, max_dist, interp = 1, outfile = False,
     """
     if np.std(target) == 0 or np.std(probe) == 0:
         raise ValueError('ncc: Cannot normalise blank images')    
-    if max_dist > min(target.shape)/2 - 1:
-        max_dist = min(target.shape)/2 - 1
+    if max_dist > min(target.shape)//2 - 1:
+        max_dist = min(target.shape)//2 - 1
 #    if interp > 1:
 #        target, probe = zoom(target, interp), zoom(probe, interp)
     #norm  
@@ -4328,17 +4332,17 @@ def ncc(target, probe, max_dist, interp = 1, outfile = False,
     
     if subpixel == 'zoom':
         ncc = zoom(ncc, interp)
-        edge = int((ncc.shape[0] - (max_dist * 2 * interp))/2) #only square iamges!!!!!!
+        edge = int((ncc.shape[0] - (max_dist * 2 * interp))//2) #only square iamges!!!!!!
         ncc = ncc[edge:-edge, edge:-edge]
     elif subpixel == 'cropped_spline':
-        edge = int((ncc.shape[0] - (max_dist * 2))/2)
+        edge = int((ncc.shape[0] - (max_dist * 2))//2)
         cropped = ncc[edge:-edge, edge:-edge]
         spline = RectBivariateSpline(
             np.arange(cropped.shape[0]), np.arange(cropped.shape[1]), cropped)
         ncc = spline(np.arange(0, cropped.shape[0], 1./interp),
                      np.arange(0, cropped.shape[1], 1./interp))
     elif subpixel == 'full_spline':
-        edge = int((ncc.shape[0] - (max_dist * 2))/2) 
+        edge = int((ncc.shape[0] - (max_dist * 2))//2) 
         spline = RectBivariateSpline(
                 np.arange(ncc.shape[0]), np.arange(ncc.shape[1]), ncc)
         ncc = spline(np.arange(edge, ncc.shape[0] - edge, 1./interp),
@@ -4737,8 +4741,8 @@ def shifts_by_cc(pcl_n, ref, query, limit, interp, tilt_angles,
     if len(ref) < step:
         bot, top = 0, len(ref)
     else:
-        bot = int(zero_tilt - 1 - (step - 1)/2)
-        top = int(zero_tilt - 1 + (step - 1)/2 + 1)
+        bot = int(zero_tilt - 1 - (step - 1)//2)
+        top = int(zero_tilt - 1 + (step - 1)//2 + 1)
     
     #make stack of ccmaps
     ccmaps = np.array([(ncc(ref[x], query[x], limit, interp))
@@ -4922,7 +4926,7 @@ def cc_middle(pcl_n, ref, query, tilt_angles, ccmaps, interp, limit, map_size,
     #skip initial peaks if median shift is specified
     if med == 'init':  
         init_peaks = biased_cc(pcl_n, tilt_angles, ccmaps, interp, limit,
-                             map_size/2, map_size/2, top, bot, centre_bias,
+                             map_size//2, map_size//2, top, bot, centre_bias,
                              thickness_scaling, out_dir, debug) 
         shifts[bot : top] = init_peaks
         med = (np.median(shifts[bot : top, 0]),
@@ -5009,7 +5013,7 @@ class extracted_particles:
         
         using non_overlapping_pcls can cause particles to be excluded
         """
-        if not  self.flg_outliers_removed:
+        if not self.flg_outliers_removed:
             if not isinstance(groups, bool):
                 if isinstance(groups, str):
                     self.groups = np.load(groups)
@@ -5029,8 +5033,9 @@ class extracted_particles:
                 #executed multiple times safely.
                 #But it does not protect from re-reading groups
                 #--> introduced flg_outliers_removed
-                self.groups = self.groups[:, gmask]
+                #self.groups = self.groups[:, gmask]
             self.sorted_pcls = self.sorted_pcls[:, gmask]
+            self.flg_outliers_removed = True
             self.update_indices()
             if not isinstance(self.model_3d, bool):
                 self.model_3d = self.model_3d[gmask]
@@ -5102,8 +5107,18 @@ class extracted_particles:
         #rearrange ssorted_pcls by groups, only operate with indices
         order = np.argsort(self.sorted_pcls[0,:,4])
         group_ordered = np.array(self.sorted_pcls[0,:,3:5][order], dtype = int)
-        c_tasks = [group_ordered[x:x + pcls_per_core]
-                for x in np.arange(self.num_pcls - 1, step = pcls_per_core)]
+        c_tasks = []
+        for x in np.arange(self.num_pcls + 1, step = pcls_per_core):
+            tmp_task = group_ordered[x:x + pcls_per_core]
+            #no point generating new chunk for very small groups, add to existing
+            if len(tmp_task) <= pcls_per_core/5 and x != 0:
+                c_tasks[-1] = np.vstack((c_tasks[-1], tmp_task))
+            else:
+                c_tasks.append(tmp_task)
+           
+        #c_tasks = [group_ordered[x:x + pcls_per_core]    
+        #        for x in np.arange(self.num_pcls + 1, step = pcls_per_core)]
+        
         return c_tasks  
     
     def fit_cosine(self, init_scale = 1, init_const = 0, return_model = True):
@@ -5342,9 +5357,9 @@ class extracted_particles:
         #define middle tilts based on middle tilt or median CCC
         if zero_tlt:
             step = max(5, self.num_tilts/4)
-            bot = int(zero_tlt - 1 - (step - 1)/2)
+            bot = int(zero_tlt - 1 - (step - 1)//2)
             #zero_tlt is numbered from 1, so take 1 off
-            top = int(zero_tlt - 1 + (step - 1)/2 + 1)   
+            top = int(zero_tlt - 1 + (step - 1)//2 + 1)   
             self.tilt_subset = np.arange(bot, top)
         else:
             #pick tilts with the highest median CCCs

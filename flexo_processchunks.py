@@ -260,7 +260,7 @@ def just_flexo(
 #                      + '-%03d_peaks.npy' % pcl_index)
 #        cc_peaks[:, x] = np.load(tmp_in) 
         
-        
+    cwd = os.getcwd()
     particles.read_cc_peaks()
     particles.plot_median_cc_vs_tilt()
     particles.plot_particle_med_cc()
@@ -325,17 +325,25 @@ def just_flexo(
     
 #####prepare peet prm - needed to decide on final tomogram binning
 
-    peet_dir = join(out_dir, 'peet')
-    if not isdir(peet_dir):
-        os.makedirs(peet_dir)
-    cwd = os.getcwd()
-    os.chdir(peet_dir)
-    fsc1d = join(peet_dir, 'fsc1/')
-    fsc2d = join(peet_dir, 'fsc2/') 
-    if not os.path.isdir(fsc1d):
-        os.makedirs(fsc1d)
-    if not os.path.isdir(fsc2d):
-        os.makedirs(fsc2d)            
+    
+    def make_peet_dirs(out_dir, pdir_base = 'peet'):
+        peet_dir = join(out_dir, pdir_base)
+        if not isdir(peet_dir):
+            os.makedirs(peet_dir)
+        os.chdir(peet_dir)
+        fsc1d = join(peet_dir, 'fsc1/')
+        fsc2d = join(peet_dir, 'fsc2/') 
+        if not os.path.isdir(fsc1d):
+            os.makedirs(fsc1d)
+        if not os.path.isdir(fsc2d):
+            os.makedirs(fsc2d)  
+        return peet_dir, fsc1d, fsc2d
+    
+    peet_dir, fsc1d, fsc2d =  make_peet_dirs(out_dir)
+    if iters_done == 0:
+        #need to run peet on the starting tomogram to see if 
+        init_peet_dir, init_fsc1d, init_fsc2d =  make_peet_dirs(out_dir,
+                                                        base = 'init_peet')
 
     if not prm2:
         #first format parent .prm before splitting it for fsc
