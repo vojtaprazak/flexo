@@ -566,6 +566,7 @@ def replace_pcles(average_map, tomo_size, csv_file, mod_file, outfile, apix,
         ave = MapParser_f32_new.MapParser.readMRC(average_map)
     else:
         ave = average_map #intended for parallelisation
+
         
     xsize = ave.x_size()
     ysize = ave.y_size()
@@ -608,7 +609,8 @@ def replace_pcles(average_map, tomo_size, csv_file, mod_file, outfile, apix,
     if mod.max() > np.array(tomo_size).max():
         print('Maximum model coordinates exceed volume size. %s %s'\
         % (mod.max(),  np.array(tomo_size).max()))
-    
+    if mod.ndim == 1:
+        mod = mod[None]
 #    print offsets, mod
     for p in range(len(mod)):
         x_pos = int(round(offsets[p][0] + mod[p][0]))
@@ -911,8 +913,6 @@ def make_non_overlapping_pcl_models(sorted_pcls, box_size, out_dir,
             group id == len(groups) indicates unallocated pcls 
     """
 
-    
-
     #box size can be 1 int, a tuple or a list
     if isinstance(box_size, int):
         box_size = [box_size, box_size]
@@ -945,7 +945,7 @@ def make_non_overlapping_pcl_models(sorted_pcls, box_size, out_dir,
         pvp[x,:,:,0] = dst
         pvp[x,:,:,1] = pos
 
-    #reduce pvp to a boolean mask mm
+    #reduce to a boolean mask
     #for each particle, particles (index = particle number) that are far enough
     #are set to 1
     mm = np.zeros((sorted_pcls.shape[1], sorted_pcls.shape[1]))    
@@ -964,7 +964,7 @@ def make_non_overlapping_pcl_models(sorted_pcls, box_size, out_dir,
     #start allocating particle indices into groups
     x = 0
     while x < len(indices):
-        #{len(indices) + 1} is essentially an impossibly large index that 
+        #len(indices) + 1 is essentially an impossibly large index that 
         #is used to filter out particle indices that have been allocated
         #to a group
         #on the first pass, tmp_indices includes all particle indices
@@ -988,9 +988,9 @@ def make_non_overlapping_pcl_models(sorted_pcls, box_size, out_dir,
             #Check for duplicates on all subsequent passes after the first
             #and remove them
             test = np.array(groups).sum(axis = 0) + a  > 1
-            mmm = np.where(test == True)
-            if np.any(mmm):
-                a[np.where(test == True)] = False    
+            if np.any(test):
+                mmm = np.where(test == True)[0]
+                a[mmm] = False  
         groups.append(a)
         
         #indices that were allocated to a group are replaced with a value
@@ -1003,7 +1003,10 @@ def make_non_overlapping_pcl_models(sorted_pcls, box_size, out_dir,
         #if there is just one remaining index, make x = len(indices)
         #this will exit the main loop
         if (indices < len(indices) + 1).sum() < 2:
-            x = len(indices) #which means the man while loop will terminate
+            #add the last group (with a single particle)
+            #it will be removed if it's below threshold
+            groups.append(np.logical_not(np.any(groups, axis = 0)))
+            x = len(indices)
         else:
             #otherwise, set x to the smallest unallocated index
             x = indices[indices != len(indices) + 1][0]            
@@ -1031,8 +1034,7 @@ def make_non_overlapping_pcl_models(sorted_pcls, box_size, out_dir,
         #list (len = number of groups) of indices belonging to each group
         pcl_ids.append(np.array(ssorted_pcls[0, groups[x], 3], dtype = 'int32'))
         #add group identifier to ssorted_pcls, numbered from zero
-        ssorted_pcls[0, groups[x], 4] = x
-
+        ssorted_pcls[0, groups[x], 4] = x  
         #write peet models for each group
         out_name = join(out_dir, 'model_group_%02d.mod' % (x))
         outmods.append(out_name)
@@ -1043,7 +1045,11 @@ def make_non_overlapping_pcl_models(sorted_pcls, box_size, out_dir,
                     outmod.add_contour(0)
             for r in range(g.shape[1]):
                 outmod.add_point(0, p, g[p,r])
-        outmod.write_model(out_name)    
+        outmod.write_model(out_name)   
+        
+    #remaining particles set to len(groups) + 1
+    ssorted_pcls[0, np.logical_not(np.any(groups, axis = 0)), 4] = len(groups) + 1
+    
     #generate "sorted_pcls style" array for each group
     novlp_sorted_pcls = []
     for g in range(len(groups)):
@@ -1097,7 +1103,7 @@ def mask_and_reproject(out_dir, base_name, mask, tomo, masked_tomo, out_ali,
 
 def format_nonoverlapping_alis(out_dir, base_name, average_map, tomo, ali, tlt,
                              pmodel, csv_file, apix, rsorted_pcls, tomo_size,
-                             var_str,
+                             var_str, box_size,
                              machines, pmodel_bin = False,
                              grey_dilation_level = 5, 
                              average_volume_binning = 1,
@@ -1140,7 +1146,7 @@ def format_nonoverlapping_alis(out_dir, base_name, average_map, tomo, ali, tlt,
     (outmods, novlp_sorted_pcls, pcl_ids, groups, remainder, ssorted_pcls
      ) = make_non_overlapping_pcl_models(
                                         rsorted_pcls,
-                                        average_size,
+                                        box_size,
                                         out_dir,
                                         threshold = threshold
                                         ) 
@@ -3092,8 +3098,12 @@ def run_generic_process(cmd, out_log = False, wait = True):
             if isfile(out_log):
                 os.rename(out_log, out_log + '~')
             write_to_log(out_log, (' ').join(cmd) + '\n')
-            for line in iter(process.stdout.readline, ''):
-                write_to_log(out_log, line.strip())
+            for line in iter(process.stdout.readline, ''.encode()):
+                # line = line.decode()
+                # if line == '':
+                #     break
+                # else:
+                write_to_log(out_log, line.decode().strip())
             com = process.communicate()                
             write_to_log(out_log, com[0].decode() + '\n' + com[1].decode())
 
@@ -3154,16 +3164,16 @@ def run_processchunks(base_name, out_dir, machines, log = False):
         write_to_log(c_log, out_dir + '\n' + (' ').join(cmd) + '\n')
 
         total_chunks, chunks_done = 0, 0
-        for line in iter(process.stdout.readline, ''):
+        for line in iter(process.stdout.readline, ''.encode()):
             line = line.decode()
-            if line == '':
-                break
-            else:
-                write_to_log(c_log, line.strip())
-                if line.split()[3:6] == ['DONE', 'SO', 'FAR']:
-                    total_chunks = int(line.split()[2])
-                    chunks_done = int(line.split()[0])
-                    progress_bar(total_chunks, chunks_done)
+            # if line == '':
+            #     break
+            # else:
+            write_to_log(c_log, line.strip())
+            if line.split()[3:6] == ['DONE', 'SO', 'FAR']:
+                total_chunks = int(line.split()[2])
+                chunks_done = int(line.split()[0])
+                progress_bar(total_chunks, chunks_done)
         com = process.communicate()
         write_to_log(c_log, com[0].decode() + '\n' + com[1].decode())
         if process.poll() != 0:
@@ -3235,10 +3245,11 @@ def run_split_peet(base_name, out_dir, base_name2, out_dir2, machines,
         total_chunks1, total_chunks2 = 0, 0
         chunks_done1, chunks_done2 = 0, 0
         for output1, output2 in zip_longest(
-                        iter(process.stdout.readline, ''),
-                        iter(process2.stdout.readline, '')):
+                        iter(process.stdout.readline, ''.encode()),
+                        iter(process2.stdout.readline, ''.encode())):
             advance_bar = False
             if output1 != None:
+                output1 = output1.decode()
                 write_to_log(c_log1, output1.strip())
                 if output1.split()[3:6] == ['DONE', 'SO', 'FAR']:
                     total_chunks1 = max(int(output1.split()[2]), total_chunks1)
@@ -3248,6 +3259,7 @@ def run_split_peet(base_name, out_dir, base_name2, out_dir2, machines,
                     total_chunks1 = chunks_done2 = total_chunks1
                     advance_bar = True                    
             if output2 != None:
+                output2 = output2.decode()
                 write_to_log(c_log2, output2.strip())
                 if output2.split()[3:6] == ['DONE', 'SO', 'FAR']:
                     total_chunks2 = max(int(output2.split()[2]), total_chunks2)
@@ -3519,14 +3531,15 @@ def check_tmpfs(chunk_id, vols, tmpfsdir = '/dev/shm'):
     chunk_id [int] unique chunk identifier
     vols [int] required space in bytes
     """            
-    import psutil
-    import os
-    import glob
-    import numpy as np
+    #import psutil
+    #import os
+    #import glob
+    #import numpy as np
                 
     if not os.path.isdir(tmpfsdir):
         os.makedirs(tmpfsdir)
-    free = psutil.disk_usage(tmpfsdir)[2]
+    #free = psutil.disk_usage(tmpfsdir)[2]
+    free = int(check_output(['df', tmpfsdir]).decode().split()[-3])
     #assuming 32bit, mask file should have the same size as each tomo
 
     #how many chunks can write into tmpfs at the same time
@@ -4077,7 +4090,10 @@ def prepare_prm(prm, ite, tom_n, out_dir, base_name, st, new_prm_dir,
     if isinstance(search_rad, bool):
         #default False to make it easier to work with defaults in higher order
         #functions
-        search_rad = [0, 0, 0]
+        #search_rad = [0, 0, 0]
+        #it makes no sense for the default to be 0. If someone forgets to
+        #set the search rad (like me) then the FSC output will be wrong
+        search_rad = [r_size[0]/4]*3
     elif isinstance(search_rad, int):
         search_rad = [search_rad, search_rad, search_rad]
 #    if len(search_rad) == 1:
@@ -4100,7 +4116,7 @@ def prepare_prm(prm, ite, tom_n, out_dir, base_name, st, new_prm_dir,
     #csv files and adding them together
     num_p = 0
     for x in tom_n:
-        num_p += int(check_output(['tail', '-1', '%s' % csv[x]]).split(',')[3])
+        num_p += int(check_output(['tail', '-1', '%s' % csv[x]]).decode().split(',')[3])
     new_prm.prm_dict['nParticles'] = num_p
     
     new_prmpath = join(new_prm_dir, base_name + '.prm') 
@@ -5019,15 +5035,16 @@ class extracted_particles:
                     self.groups = np.load(groups)
                 else:
                     self.groups = groups
-            if isinstance(self.groups, str):
+            elif isinstance(self.groups, str):
                 self.groups = np.load(self.groups)
+                
             if isinstance(self.sorted_pcls, str):
                 self.sorted_pcls = np.load(self.sorted_pcls)
             if self.groups.ndim == 1:
                 #in case there is only one group
                 gmask = self.groups
             else:
-                gmask = np.sum(self.groups, axis = 0, dtype = bool)
+                gmask = np.any(self.groups, axis = 0)
                 #gmask has len(particles) - len(excludelist)
                 #this removes outliers from self.groups, meaning that this can be
                 #executed multiple times safely.

@@ -34,7 +34,7 @@ from PEETMotiveList import PEETMotiveList
 
 def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
                           model_file_binning, csv, average_volume, defocus_file,
-                          box, imaging_params,
+                          box, imaging_params, box_size,
                           machines, grey_dilation_level = 5,
                           non_overlapping_pcls = False, iters = 1,
                           iters_done = 1, zero_tlt = 0,
@@ -242,7 +242,7 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
          ) = format_nonoverlapping_alis(
                 out_dir, base_name, average_volume, full_tomo,
                 ali, tlt, model_file, csv, apix, rsorted_pcls,
-                tomo_size, var_str, machines, model_file_binning,
+                tomo_size, var_str, box_size, machines, model_file_binning,
                 grey_dilation_level,
                 average_volume_binning,
                 lamella_mask_path,

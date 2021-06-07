@@ -81,7 +81,7 @@ for iters_done in range(curr_iter, iters + 1):
         ffile = flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
                                   model_file_binning, csv, average_volume, 
                                   defocus_file,
-                                  box, imaging_params,
+                                  box, imaging_params, box,
                                   machines, grey_dilation_level, 
                                   non_overlapping_pcls, iters,
                                   iters_done, zero_tlt,
