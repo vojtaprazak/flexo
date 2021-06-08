@@ -3938,7 +3938,7 @@ def prepare_prm(prm, ite, tom_n, out_dir, base_name, st, new_prm_dir,
     determination in order to detect change in alignment of the Flexo 
     aligned tomogram.
     
-    Specify either both half-data set PRM files or asingle PRM file in 
+    Specify either both half-data set PRM files or a single PRM file in 
     which case this file will be split in two.
 
     The alignment should already be pretty good.
@@ -3946,6 +3946,8 @@ def prepare_prm(prm, ite, tom_n, out_dir, base_name, st, new_prm_dir,
         prm [str] path to PEET parameter file
         ite [int] PEET iteration (uses PEETPRMFile)
         tom_n - [int or list] numbered from 1, use 'all' to include all
+            This option is available in case there are e.g. multiple model
+            files relating to the same tomogram.
         out_dir [str] path to output directory
         base_name [str] desired output base name
         st [str] path to original tilt series stack
@@ -3967,7 +3969,7 @@ def prepare_prm(prm, ite, tom_n, out_dir, base_name, st, new_prm_dir,
             default False
         refthr [int] number of particles to be included in the average
             default False
-        tomo [str, list or bool] path to tomo(s)
+        tomo [str, list, bool or 'init'] path to tomo(s)
             default False
     Returns:
         [numpy.ndarray] frequency at cutoff, resolution at cutoff,
@@ -3999,6 +4001,8 @@ def prepare_prm(prm, ite, tom_n, out_dir, base_name, st, new_prm_dir,
     st_apix, st_size = get_apix_and_size(st)
     #at what binning was the peet project actually run?
     peet_bin = int(np.round(r_apix/st_apix, decimals = 0))
+
+
     
     #which tomograms/mods/csvs should be used (all stored as list of strings)
     if isinstance(tom_n, str):
@@ -4020,6 +4024,8 @@ def prepare_prm(prm, ite, tom_n, out_dir, base_name, st, new_prm_dir,
                 tom_n = np.array(tom_n)
             else:                
                 tom_n = np.array(tom_n) - 1
+
+
     mod = [modfiles[n] for n in tom_n]
     csv = [motls[n] for n in tom_n]
     
@@ -4028,12 +4034,13 @@ def prepare_prm(prm, ite, tom_n, out_dir, base_name, st, new_prm_dir,
         tomo = [join(out_dir, base_name + '_bin%s.rec' % int(peet_bin))
                 for m in range(len(mod))]
     elif isinstance(tomo, str):
-        if len(tom_n) == 1:
-            tomo = [realpath(tomo)]
+        if tomo == 'init':
+            tomo = prm.prm_dict['fnVolume']
+        tomo = [realpath(tomo[tom_n[t]]) for t in range(len(tom_n))]          
     elif (isinstance(tomo, list) or isinstance(tomo, tuple)
             or isinstance(tomo, (np.ndarray, np.generic))):
         tomo = list(tomo)
-        if len(tomo) != len(tom_n):
+        if len(tomo) != len(tom_n):       
             raise ValueError('prepare_prm: Number of tomogram paths does ' +
                              'not match the number of requested tomograms.')
     #tilt range - stored as list of lists
@@ -4068,7 +4075,7 @@ def prepare_prm(prm, ite, tom_n, out_dir, base_name, st, new_prm_dir,
            
         
     if isinstance(hicutoff, bool):    
-        hicutoff = [0.45, max(1./r_size[0], 0.03)]
+        hicutoff = [0.45, np.round(max(1./r_size[0], 0.03), decimals = 3)]
     #list of lists
     try:
         new_prm.prm_dict['hiCutoff'] = [list(hicutoff)]

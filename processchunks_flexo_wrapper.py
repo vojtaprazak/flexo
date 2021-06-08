@@ -154,12 +154,12 @@ for iters_done in range(curr_iter, iters + 1):
         else:
             r = res[:,1]
             if np.any(np.floor(r) == np.floor(apix*2)) or get_area:
+                #in case resolution = resolution at Nyquist, use area under FSC
                 areas = np.round(res[:,2], decimals = 3)
                 if not get_area:
-                #in case resolution = resolution at Nyquist, use area under FSC
                     print(('Estimated resolution too close to Nyquist. ' + 
                            'Using area under FSC instead.'))
-                print(('Areas under FSC of iterations 1-%s: %s' % 
+                print(('Areas under FSC of initial PEET, iterations 1-%s: %s' % 
                    (iters_done, (',').join([str(x) for x in areas]))))
                 if areas[-1] <= areas[-2]:
                     print(('No apparent improvement since last iteration.'

@@ -337,44 +337,57 @@ def just_flexo(
             os.makedirs(fsc1d)
         if not os.path.isdir(fsc2d):
             os.makedirs(fsc2d)  
-        return peet_dir, fsc1d, fsc2d
+        return peet_dir, fsc1d, fsc2d   
+    
+    def wrap_prep_prm(peet_dir, fsc1d, fsc2d, prm, prm2, init_tomo):
+        if not prm2:
+                    #first format parent .prm before splitting it for fsc
+            peet_bin, new_prm, peet_apix = prepare_prm(
+                    prm, ite, tom_n, out_dir, base_name, st, peet_dir,
+                    search_rad = search_rad,
+                    phimax_step = phimax_step,
+                    psimax_step = psimax_step,
+                    thetamax_step = thetamax_step,
+                    tomo = init_tomo)
+            
+            r_new_prm = PEETPRMFile(new_prm)
+            print('Splitting PEET run for FSC.')
+            r_new_prm.split_by_classID(ite, fsc1d,
+                            classes = [1], splitForFSC = True, writeprm = True)
+            r_new_prm.split_by_classID(ite, fsc2d,
+                            classes = [2], splitForFSC = True, writeprm = True)  
+            prm1 = join(fsc1d, base_name + '_fromIter%s_cls1.prm' % ite)
+            prm2 = join(fsc2d, base_name + '_fromIter%s_cls2.prm' % ite)        
+        else: 
+            #if PEET was already split for FSC
+            peet_bin, prm1 = prepare_prm(
+                    prm, ite, tom_n, out_dir, base_name, st, fsc1d)        
+            peet_bin2, prm2 = prepare_prm(
+                    prm2, ite, tom_n, out_dir, base_name, st, fsc2d)
+            if peet_bin != peet_bin2:
+                raise ValueError('The two PEET half data-sets do not have the'
+                                 + ' same binning.')
+        return peet_bin, prm1, prm2, peet_apix
+
     
     peet_dir, fsc1d, fsc2d =  make_peet_dirs(out_dir)
-    if iters_done == 0:
+    if iters_done == 1:
         #need to run peet on the starting tomogram to see if 
         init_peet_dir, init_fsc1d, init_fsc2d =  make_peet_dirs(out_dir,
-                                                        base = 'init_peet')
+            #init_peet_dir is redefined in parser_peet_fsc!
+            #but I don't want to pass it between iterations,
+            #so the base should stay "init_peet"
+                                                    pdir_base = 'init_peet')
 
-    if not prm2:
-        #first format parent .prm before splitting it for fsc
-        peet_bin, new_prm, peet_apix = prepare_prm(
-                prm, ite, tom_n, out_dir, base_name, st, peet_dir,
-                search_rad = search_rad,
-                phimax_step = phimax_step,
-                psimax_step = psimax_step,
-                thetamax_step = thetamax_step)
+    #note: the binning of the flexo tomogram for PEET is determined from
+    #the pixel size of the supplied PEET .prm reference volume
+            
+    if iters_done == 1:
+        _, init_prm1, init_prm2, _ = wrap_prep_prm(init_peet_dir, init_fsc1d,
+                                             init_fsc2d, prm, prm2, 'init')        
+    peet_bin, prm1, prm2, peet_apix = wrap_prep_prm(peet_dir, fsc1d,
+                                                    fsc2d, prm, prm2, False)
         
-        r_new_prm = PEETPRMFile(new_prm)
-        print('Splitting current PEET run for FSC.')
-        r_new_prm.split_by_classID(ite, fsc1d,
-                        classes = [1], splitForFSC = True, writeprm = True)
-        r_new_prm.split_by_classID(ite, fsc2d,
-                        classes = [2], splitForFSC = True, writeprm = True)  
-        prm1 = join(fsc1d, base_name + '_fromIter%s_cls1.prm' % ite)
-        prm2 = join(fsc2d, base_name + '_fromIter%s_cls2.prm' % ite)        
-    else:
-        #if PEET was already split for FSC
-        peet_bin, prm1 = prepare_prm(
-                prm, ite, tom_n, out_dir, base_name, st, fsc1d)        
-        peet_bin2, prm2 = prepare_prm(
-                prm2, ite, tom_n, out_dir, base_name, st, fsc2d)
-        if peet_bin != peet_bin2:
-            raise ValueError('The two PEET half data-sets do not have the'
-                             + ' same binning.')
-
-      
-#    unbin_apix, _ = get_apix_and_size(st)
-#    peet_apix = peet_bin * unbin_apix
     
     #binning of the "default" tomo and ali needs to be preserved across 
     #iterations, including whats in tilt.com and align.com
@@ -454,34 +467,51 @@ def just_flexo(
     
     #run PEET
     #getting the base this way should be fine since I define the prm names
-    #earlier anyway        
-    prm_base1 = os.path.split(prm1)[1][:-4]
-    prm_base2 = os.path.split(prm2)[1][:-4]
-    os.chdir(fsc1d)
-    run_generic_process(['prmParser', prm_base1 + '.prm'], 
-                        join(fsc1d, 'parser.log'))
-    #check_output('prmParser %s' % prm_base1, shell = True)
-    if not isfile(prm_base1 + '-001.com'): 
-        raise Exception('prmParser failed to generate com files. %s' % prm1)
-    os.chdir(fsc2d)
-    run_generic_process(['prmParser', prm_base2 + '.prm'], 
-                        join(fsc1d, 'parser.log'))  
-    if not isfile(prm_base2 + '-001.com'):
-        raise Exception('prmParser failed to generate com files. %s' % prm2)
+    #earlier anyway   
+    def parser_peet_fsc(peet_dir, prm1, prm2, fsc1d, fsc2d, init = False):
+        
+        prm_base1 = os.path.split(prm1)[1][:-4]
+        prm_base2 = os.path.split(prm2)[1][:-4]
+        os.chdir(fsc1d)
+        run_generic_process(['prmParser', prm_base1 + '.prm'], 
+                            join(fsc1d, 'parser.log'))
+        #check_output('prmParser %s' % prm_base1, shell = True)
+        if not isfile(prm_base1 + '-001.com'): 
+            raise Exception('prmParser failed to generate com files. %s' % prm1)
+        os.chdir(fsc2d)
+        run_generic_process(['prmParser', prm_base2 + '.prm'], 
+                            join(fsc1d, 'parser.log'))  
+        if not isfile(prm_base2 + '-001.com'):
+            raise Exception('prmParser failed to generate com files. %s' % prm2)
+    
+        #check_output('prmParser %s' % prm_base2, shell = True)
+    
+        run_split_peet(prm_base1, fsc1d, prm_base2, fsc2d, machines)
+        #calcUnbiasedFSC
+        os.chdir(peet_dir)
+        fsc_log = join(peet_dir, 'calcUnbiasedFSC.log')
+        print('Running calcUnbiasedFSC...')
+        run_generic_process(['calcUnbiasedFSC', prm1, prm2], out_log = fsc_log)
+        #iters_done = 1 during first iteration
+        
+        init_peet_dir = split(out_dir)[0] + '/iteration_1/init_peet/'
+        if init:
+            fsc_dirs = init_peet_dir
+        else:
+            fsc_dirs = [split(out_dir)[0] + '/iteration_%s/peet/' % (ii + 1)
+                     for ii in range(iters_done)]
+            fsc_dirs = [init_peet_dir] + fsc_dirs
+        print('peet dirs %s' % fsc_dirs)
+        res = plot_fsc(fsc_dirs, peet_dir, cutoff, peet_apix)
+        os.chdir(cwd)
+        return res
 
-    #check_output('prmParser %s' % prm_base2, shell = True)
+    if iters_done == 1:    
+        print('Running init PEET...')        
+        res = parser_peet_fsc(init_peet_dir, init_prm1, init_prm2,
+                                   init_fsc1d, init_fsc2d, init = True)
     print('Running PEET...')
-    run_split_peet(prm_base1, fsc1d, prm_base2, fsc2d, machines)
-    #calcUnbiasedFSC
-    os.chdir(peet_dir)
-    fsc_log = join(peet_dir, 'calcUnbiasedFSC.log')
-    print('Running calcUnbiasedFSC...')
-    run_generic_process(['calcUnbiasedFSC', prm1, prm2], out_log = fsc_log)
-    #iters_done = 1 during first iteration
-    peet_dirs = [split(out_dir)[0] + '/iteration_%s/peet/' % (ii + 1)
-                 for ii in range(iters_done)]
-    print('peet dirs %s' % peet_dirs)
-    res = plot_fsc(peet_dirs, peet_dir, cutoff, peet_apix)
-    os.chdir(cwd)
+    res = parser_peet_fsc(peet_dir, prm1, prm2, fsc1d, fsc2d)
+    
     return res
 
