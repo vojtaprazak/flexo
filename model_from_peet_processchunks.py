@@ -246,10 +246,10 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
                 grey_dilation_level,
                 average_volume_binning,
                 lamella_mask_path,
-                threshold = threshold)
+                threshold = threshold,
+                use_init_ali = use_init_ali)
         
         if orthogonal_subtraction:
-            
             g0 = np.load(group_path)
             average_map = MapParser.readMRC(average_volume) 
             csv_file = PEETMotiveList(csv)

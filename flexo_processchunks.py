@@ -412,7 +412,8 @@ def just_flexo(
                             deftol = 200,
                             interp_w = 4, #this shouldn't be 4 everywhere...
                             n_tilts = particles.num_tilts,
-                            machines = machines)
+                            machines = machines,
+                            no_ctf_convolution = no_ctf_convolution)
     
     def make_link(src, dst):
         if os.path.islink(dst):

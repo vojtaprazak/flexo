@@ -48,8 +48,8 @@ except:
 starting_out_dir = realpath(out_dir)
 orig_rec_dir = rec_dir #unchanged during iterations
 orig_tomo = False
-if use_init_ali:
-    non_overlapping_pcls = False 
+#if use_init_ali:
+#    non_overlapping_pcls = False 
 if curr_iter > 1:
     #this is done specifically to get orig_tomo after restarting
     exec(compile(open(join(out_dir, 'iteration_%s' % str(curr_iter - 1),
@@ -318,7 +318,7 @@ gpr min/max scale probably needs to be tweaked based on averaging results... but
 #n_orth = 6
 ## Avoid particle overlap during cross correlation
 #non_overlapping_pcls = True
-## Use original projectons for cross correlation.  This option disables non_overlapping_pcls.
+## Use original projectons for cross correlation.
 #use_init_ali = False
 ## Additional binning for tomogram positioning. Uses tomograms binned to [spec_tiny_size]*[current binning].  Combined binning of up to 20x works.
 #spec_tiny_size = 2 

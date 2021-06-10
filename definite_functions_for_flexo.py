@@ -495,7 +495,14 @@ def rotate_model(tomo, full_tomo, ali, base_name,
 
     #read model file and apply offsets from csv
     m = np.array(PEETmodel(model_file).get_all_points())
+    
+    try:
+        open(csv).readlines()
+        #mod is binary so this should fail
+    except:
+        raise Exception('Invalid PEET csv file. %s' % csv)
     motl = PEETMotiveList(csv)
+
     offsets = motl.get_all_offsets()
     m += offsets
     tmp_mod = join(out_dir, 'tmp.mod')
@@ -533,6 +540,8 @@ def rotate_model(tomo, full_tomo, ali, base_name,
                 ' -ProjectModel %s') % (ali, reprojected_mod,
                                        tlt, tomo_size[2], tmp_mod)
                 ]
+    add_tilt_params = 'skip'
+    warnings.warn('add tilt params disabled')
     if np.any(add_tilt_params != 'skip'):
         for y in range(len(add_tilt_params)):
             tilt_str.append(add_tilt_params[y])     
@@ -1108,7 +1117,8 @@ def format_nonoverlapping_alis(out_dir, base_name, average_map, tomo, ali, tlt,
                              grey_dilation_level = 5, 
                              average_volume_binning = 1,
                              lamella_mask_path = False,
-                             threshold = 0.01):
+                             threshold = 0.01,
+                             use_init_ali = False):
 
 
     """
@@ -1162,7 +1172,10 @@ def format_nonoverlapping_alis(out_dir, base_name, average_map, tomo, ali, tlt,
         plotback_list.append(join(out_dir, 'plotback_%02d.mrc' % x))
         out_mask_list.append(join(out_dir, 'mask_%02d.mrc' % x))
         smooth_mask_list.append(join(out_dir, 'smooth_mask_%02d.mrc' % x))
-        sub_ali_list.append(join(out_dir, 'subtracted_%02d.mrc' % x))
+        if use_init_ali:
+            sub_ali_list.append(ali)
+        else:
+            sub_ali_list.append(join(out_dir, 'subtracted_%02d.mrc' % x))
         masked_tomo_list.append(join(out_dir, 'masked_%02d.mrc' % x))
         plotback_ali_list.append(join(out_dir, 'plotback_%02d.ali' % x))
     ssorted_path = join(out_dir, base_name + '_ssorted.npy')
@@ -1244,6 +1257,7 @@ def format_nonoverlapping_alis(out_dir, base_name, average_map, tomo, ali, tlt,
         '>pmodel_bin = %s' %  pmodel_bin,
         '>average_volume_binning = %s' %  average_volume_binning,
         '>grey_dilation_level = %s' %  grey_dilation_level,
+        '>use_init_ali = %s' % use_init_ali,
         '>chunk_non_overlapping_alis(average_map,',
         '>                           csv_file,',
         '>                           pmodel,',
@@ -1266,7 +1280,8 @@ def format_nonoverlapping_alis(out_dir, base_name, average_map, tomo, ali, tlt,
         '>                           apix,',
         '>                           pmodel_bin,',
         '>                           average_volume_binning,',
-        '>                           grey_dilation_level)',
+        '>                           grey_dilation_level,',
+        '>                           use_init_ali)',
         )
         comfile = join(out_dir, base_name + '-%03d.com' % x)
         with open(comfile, 'w') as f:
@@ -1283,7 +1298,8 @@ def chunk_non_overlapping_alis(average_map, csv_file, pmodel, group_path,
                                sub_ali_list, masked_tomo_list, out_mask_list,
                                smooth_mask_list, plotback_ali_list, var_str,
                                tomo_size, apix, pmodel_bin, 
-                               average_volume_binning, grey_dilation_level):
+                               average_volume_binning, grey_dilation_level,
+                               use_init_ali = False):
     """
     This can handle a single tomo as input (still needs to be a list) or
     multiple inputs.
@@ -1314,22 +1330,22 @@ def chunk_non_overlapping_alis(average_map, csv_file, pmodel, group_path,
         for a in range(len(groups)):
             reproject_volume(plotback_list[a], ali, tlt, tomo_size[2], 
                              plotback_ali_list[a], var_str)    
-
-    print('Generating tomogram masks.')
-    for a in range(len(groups)):
-        NEW_mask_from_plotback(plotback_list[a], out_mask_list[a],
-            grey_dilation_level, False, False, smooth_mask_list[a])
-
-    if lamella_mask_path:
-        #combined masks with an existing lamella mask
+    if not use_init_ali:
+        print('Generating tomogram masks.')
         for a in range(len(groups)):
-            mult_mask(lamella_mask_path, smooth_mask_list[a])
-        
-    print('Reprojecting masked tomos.')
-    for a in range(len(groups)):
-        mask_and_reproject(out_dir, base_name, smooth_mask_list[a], tomo, 
-                           masked_tomo_list[a], sub_ali_list[a],
-                           ali, tlt, tomo_size[2], var_str)
+            NEW_mask_from_plotback(plotback_list[a], out_mask_list[a],
+                grey_dilation_level, False, False, smooth_mask_list[a])
+    
+        if lamella_mask_path:
+            #combined masks with an existing lamella mask
+            for a in range(len(groups)):
+                mult_mask(lamella_mask_path, smooth_mask_list[a])
+            
+        print('Reprojecting masked tomos.')
+        for a in range(len(groups)):
+            mask_and_reproject(out_dir, base_name, smooth_mask_list[a], tomo, 
+                               masked_tomo_list[a], sub_ali_list[a],
+                               ali, tlt, tomo_size[2], var_str)
         
 ##############################################################################
 
@@ -3824,7 +3840,8 @@ def reconstruct_binned_tomo(out_dir, base_name, binning, st, output_xf,
                             deftol = 200,
                             interp_w = 4,
                             n_tilts = False,
-                            machines = False):
+                            machines = False,
+                            no_ctf_convolution = False):
     """
     Purely for readability of flexo_processchunks.py
     Creates comscripts with _bin[binning].com extension so the original
@@ -3847,32 +3864,26 @@ def reconstruct_binned_tomo(out_dir, base_name, binning, st, output_xf,
                          xfile, localxf, zfac, excludelist,
                          output_rec,
                          com_ext = com_ext) 
-    warnings.warn('ctfcorrection disabled!')
-    
-    
-    
-    
-    
-    
+
     ctf_ali = format_ctfcorr(output_ali, output_tlt, output_xf, 
                              defocus_file, out_dir, base_name, V, Cs, ampC, 
                              apix,
                              deftol,
                              #to be added to inputs:
                              interp_w)
-    ctf_ali = output_ali
-        
-        
-        
-        
+  
     #make ts
     imodscript('newst_bin%s.com' % int(binning), os.path.realpath(out_dir))
     #ctfcorrect
-    check_output('splitcorrection -m %s ctfcorrection.com' % 
-                 int(np.floor(n_tilts/len(machines))),
-                 shell = True)
-    run_processchunks('ctfcorrection', out_dir, machines)
-    os.rename(ctf_ali, output_ali)
+    if no_ctf_convolution:
+        ctf_ali = output_ali
+    else:
+        warnings.warn('Ctfcorrection disabled!')
+        check_output('splitcorrection -m %s ctfcorrection.com' % 
+                     int(np.floor(n_tilts/len(machines))),
+                     shell = True)
+        run_processchunks('ctfcorrection', out_dir, machines)
+        os.rename(ctf_ali, output_ali)
     #reconstruct
     check_output('splittilt -n %s tilt_bin%s.com' % (len(machines),
                             int(binning)), shell = True)
@@ -4569,18 +4580,19 @@ def p_extract_and_cc(
             file_ids = np.zeros(rsorted_pcls.shape[1], dtype = int)  
         else:
             #extract file identifiers from paths
-            fa = [int(x.split('_')[-1].split('.')[0]) for x in alis]          
-            fp = [int(x.split('_')[-1].split('.')[0]) for x in alis]   
-            if not (np.unique(fa) == np.unique(fp)).all():
-                raise Exception('Ali and plotback numbering do not match.')
-            if len(np.unique(fa)) != len(np.unique(group_ids)):
+            #VP 8/6/2021: alis can now be the initial .ali
+            #fa = [int(x.split('_')[-1].split('.')[0]) for x in alis]          
+            fp = [int(x.split('_')[-1].split('.')[0]) for x in plotbacks]   
+            #if not (np.unique(fa) == np.unique(fp)).all():
+            #    raise Exception('Ali and plotback numbering do not match.')
+            if len(np.unique(fp)) != len(np.unique(group_ids)):
                 raise Exception('Numbers of groups and files do not match.')
             #make sure files are in ascending order
-            alis = [alis[np.argsort(fa)[x]] for x in range(len(alis))]
+            #alis = [alis[np.argsort(fa)[x]] for x in range(len(alis))]
             plotbacks = [plotbacks[np.argsort(fp)[x]]
                             for x in range(len(plotbacks))]
             uid = np.unique(group_ids)
-            test = np.isin(uid, fa)
+            test = np.isin(uid, fp)
             if not np.all(test):
                 raise ValueError('Group IDs do not match file names')
             #renumber group IDs to match indices of [alis]
@@ -4592,8 +4604,15 @@ def p_extract_and_cc(
         file_ids = np.zeros(rsorted_pcls.shape[1], dtype = int)  
     #read in image files
     #mrcfile doesn't like files processed in e.g. bsoft, use permissive mode
-    read_ali = [deepcopy(mrcfile.open(x, permissive = True).data)
+    
+    if np.unique(alis).size == 1:
+        #if the initial ali is passed on multiple times
+        read_ali = deepcopy(mrcfile.open(alis[0], permissive = True).data)
+        one_ali = True
+    else:
+        read_ali = [deepcopy(mrcfile.open(x, permissive = True).data)
                 for x in alis]
+        one_ali = False
     read_plotback = [deepcopy(mrcfile.open(x, permissive = True).data)
                     for x in plotbacks]
 
@@ -4635,7 +4654,10 @@ def p_extract_and_cc(
         for x in range(len(alis)):
             if not orthogonal_subtraction:
                 #excludelist entries are removed during orthogonal subtraction
-                read_ali[x] = read_ali[x][excludelist_mask]
+                if one_ali:
+                    read_ali = read_ali[excludelist_mask]
+                else:
+                    read_ali[x] = read_ali[x][excludelist_mask]
             #VP 2/12/2020 I think this indentation is correct (i.e not part
             #of if statement).  The reprojected tilt series that come from
             #orthogonal subtraction don't have excludelist views...
@@ -4650,7 +4672,10 @@ def p_extract_and_cc(
         #fcc_peaks - lowpassed cc maps
         
         #extract particle stacks
-        query = extract_2d_simplified(read_ali[file_ids[x]], 
+        if one_ali:
+            query = extract_2d_simplified(read_ali, rsorted_pcls[:, x], box)
+        else:
+            query = extract_2d_simplified(read_ali[file_ids[x]], 
                                                rsorted_pcls[:, x], box)
         ref = extract_2d_simplified(read_plotback[file_ids[x]],
                                                   rsorted_pcls[:, x], box)
