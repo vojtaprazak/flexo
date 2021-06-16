@@ -48,7 +48,7 @@ import csv
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 import signal
-#import time
+import time
 import warnings
 
 #import timeit
@@ -487,6 +487,10 @@ def rotate_model(tomo, full_tomo, ali, base_name,
     model_file_binning is the binning of model file relative to tomogram.
     I.e. a model that's twice the size of specified tomogram is bin 0.5.
     """
+    
+    print('modfile %s' % model_file)
+    print(csv)
+    
     #model for particle extraction
     #modpath, modname = split(model_file)
     reprojected_mod = join(out_dir, 'reprojected_fid.mod')
@@ -540,8 +544,9 @@ def rotate_model(tomo, full_tomo, ali, base_name,
                 ' -ProjectModel %s') % (ali, reprojected_mod,
                                        tlt, tomo_size[2], tmp_mod)
                 ]
-    add_tilt_params = 'skip'
-    warnings.warn('add tilt params disabled')
+    #add_tilt_params = 'skip'
+    #warnings.warn('add tilt params disabled')
+    
     if np.any(add_tilt_params != 'skip'):
         for y in range(len(add_tilt_params)):
             tilt_str.append(add_tilt_params[y])     
@@ -2563,6 +2568,9 @@ def format_align(out_dir, base_name, ali, tlt, binning, fid_model,
         f.write('\nRotOption\t1') 
         f.write('\nRotDefaultGrouping\t5') 
         f.write('\nTiltOption\t2')
+        f.write('\nTiltOption\t0')
+        
+        
         f.write('\nTiltDefaultGrouping\t5')
         f.write('\nMagReferenceView\t%s' % zero_tlt)
         f.write('\nMagOption\t1')
@@ -2740,7 +2748,9 @@ def format_ctfcorr(ali, tlt, xf, defocus_file, out_dir, base_name,
 
 #################################################################################
 def get_tomo_transform(ref, query, angrange, transform = 'rotation', 
-                           interp = 1, out_dir = False, nstrips = 20, subset = 4):
+                           interp = 1, out_dir = False, nstrips = 20,
+                           subset = 4, new = True,
+                           edge = 3):
     """
     chops tomos into {nstrips} strips that are then flattened into 2d images.
     checks rotations for either rotation between these
@@ -2751,15 +2761,20 @@ def get_tomo_transform(ref, query, angrange, transform = 'rotation',
     
     ref, query {path to tomograms  or np arrays} 
         expecting flexo first, then initial tomo
+        VOLUMES HAVE TO BE ROTATED BY 90 DEGREES!
+        This is done automatically if paths are specified instead of arrays
     angrange {even real}
     subset {real} perform rotation with every nth strip
+    
     """
     if isinstance(ref, str):
         tiny_flexo = deepcopy(mrcfile.open(ref).data)
+        tiny_flexo = np.rot90(tiny_flexo, k = 1, axes = (0,1))
     else:
         tiny_flexo = ref
     if isinstance(query, str):
         tiny_orig = deepcopy(mrcfile.open(query).data)
+        tiny_orig = np.rot90(tiny_orig, k = 1, axes = (0,1))
     else:
         tiny_orig = query
 
@@ -2803,29 +2818,35 @@ def get_tomo_transform(ref, query, angrange, transform = 'rotation',
         #fyz = filter_strips(fyz, apix)
 
         #do rotation check for a subset of strips
-        sub_oxz = oxz[::4]
-        sub_fxz = fxz[::4]
-        sub_oyz = oyz[::4]
-        sub_fyz = fyz[::4]
+        sub_oxz = oxz[::subset]
+        sub_fxz = fxz[::subset]
+        sub_oyz = oyz[::subset]
+        sub_fyz = fyz[::subset]
         
-        #first check for rotation, then remake flexo tomogram 
-        for x in range(len(sub_oxz)):
-            yrot.append(in_plane_rotation(sub_fxz[x], sub_oxz[x], angrange,
-                        out_dir, sub_oxz[x].shape[0]//2 - 1, interp, False)[0])
-        for x in range(len(sub_oyz)):
-            xrot.append(in_plane_rotation(sub_fyz[x], sub_oyz[x], angrange,
-                        out_dir, sub_oyz[x].shape[0]//2 - 1, interp, False)[0])            
-        yrot = np.array(yrot[yrot != np.nan])
-        xrot = np.array(xrot[xrot != np.nan])
-
-        #remake flexo tomogram with corrected rotation
         if out_dir:
 
             write_mrc(join(out_dir, 'matchref_ystrips.mrc'), oxz)
             write_mrc(join(out_dir, 'matchq_ystrips.mrc'), fxz)
             write_mrc(join(out_dir, 'matchref_xstrips.mrc'), oyz)
             write_mrc(join(out_dir, 'matchq_xstrips.mrc'), fyz)
+        
+        #first check for rotation, then remake flexo tomogram 
+        for x in range(len(sub_oxz)):
+            yrot.append(in_plane_rotation(sub_fxz[x], sub_oxz[x], angrange,
+                                   out_dir, sub_oxz[x].shape[0]//2 - 1,
+                                   interp = 1,
+                      order = 3, refine = True, edge = edge, mode = 'nearest'))
 
+        for x in range(len(sub_oyz)):
+            xrot.append(in_plane_rotation(sub_fyz[x], sub_oyz[x], angrange,
+                                   out_dir, sub_oyz[x].shape[0]//2 - 1,
+                                   interp = 1,
+                      order = 3, refine = True, edge = edge, mode = 'nearest'))        
+        yrot = np.array(yrot[yrot != np.nan])
+        xrot = np.array(xrot[xrot != np.nan])
+
+        #remake flexo tomogram with corrected rotation
+        if out_dir:
             f, axes = plt.subplots()
             f.suptitle('relative tomogram rotation')
             axes.plot(yrot, label = 'Y rotation')
@@ -3131,7 +3152,8 @@ def run_generic_process(cmd, out_log = False, wait = True):
             p = process.poll()
             if p != 0:
                 out_log = realpath('run_generic_process_error.log')
-                com = process.communicate()
+                #com = process.communicate()
+                write_to_log(out_log, (' ').join(cmd))
                 write_to_log(out_log, com[0].decode() + '\n' + com[1].decode())
                 raise ValueError(('run_generic_process: Process returned' +
                                  ' non-zero status.  See %s') % out_log)
@@ -3344,106 +3366,53 @@ def run_split_peet(base_name, out_dir, base_name2, out_dir2, machines,
 
 ##############################################################################
 
-def in_plane_rotation(ref, query, angrange, out_dir, limit = 20, interp = 1,
-                      verbose = False, subdegree = 0.2):
+def in_plane_rotation(ref, query, angrange, out_dir, limit = 10, interp = 1,
+                      order = 3, refine = True, edge = 3, mode = 'nearest'):
+    
+    #interp never used#
+    
     """
     input 2d
     angrange should be even
-    subdegree in single decimals
+    decimal
+    edge removes 
+    
     """
+    def rotate_and_cc(angles):
         
+        mat = np.zeros(len(angles))
+        for x in range(len(angles)):
+            r = rotate(ref, angles[x], (0,1), reshape = False, order = order)#, mode = mode)
+            if edge:
+                r = r[edge:-edge, edge:-edge]
+            cc = ncc(query, r, limit, 1, outfile=False)
+            mat[x] = cc.max()              
+        fine = np.linspace(angles[0], angles[-1], 101)
+        intp = interp1d(angles, mat, kind = 2)
+        fintp = intp(fine)
+
+        pkpos, pkh = find_peaks(fintp, np.min(fintp))
+        pkh = pkh['peak_heights']
+
+        if pkh.size == 0:
+            bestphi = np.nan
+            subdegree = False
+        else:
+            bestphi = fine[pkpos[np.argmax(pkh)]]
+        return bestphi
+
     if angrange%2 != 0:
         angrange += 1
-    mat = np.zeros((angrange+1))
-    ccs = []
-    rot_ref = np.zeros((angrange + 1, ref.shape[0], ref.shape[1]))
-
-    for x in range(-angrange//2, angrange//2 + 1):
-        r = rotate(ref, x, (0,1), reshape = False)
-        rot_ref[x + angrange//2] = r        
-        cc = ncc(query, r, limit, 1, outfile=False)   
-        ccs.append(cc)
-        mat[x + angrange//2] = cc.max()
-
-    pkpos, pkh = find_peaks(mat, np.min(mat))
-    pkh = pkh['peak_heights']
-#    print pkpos
-    if pkh.size == 0:
-        bestphi = np.nan
-        subdegree = False
-    else:
-        bestphi = np.array(pkpos[np.where(pkh == pkh.max())])
-        #bestphi = np.max(find_peaks(mat, np.min(mat))[0])
-        bestphi -= angrange//2
-    
-    if verbose:
-        edge = int(np.round(np.sqrt(angrange+1), decimals = 0))
-        if edge > np.sqrt(angrange+1):
-            f, axes = plt.subplots(edge,edge, figsize = (3*edge, 3*edge))
-            nboxes = edge**2
-        else:
-            f, axes = plt.subplots(edge,edge + 1,
-                                   figsize = (3*edge, 3*edge + 1))
-            nboxes = edge*(edge + 1)
-        axes = axes.ravel()
-        angles = np.arange(-angrange//2, angrange//2 + 1)
-        for x in range(angrange + 1):
-            axes[x].imshow(ccs[x], cmap = "Greys")
-            axes[x].title.set_text('Y rotation %s' % x)
-        #remove empty plots
-        if angrange + 1 < nboxes:
-            for y in range(angrange + 2, nboxes):
-                axes[y].set_visible = False
-                
-        f.suptitle('CC maps of initial tomo vs Y-rotated flexo tomos')
-        f.savefig(os.path.join(out_dir, 'whole_tomo_rotation_cc_maps.png'),
-                    bbox_inches = 'tight')
-        plt.close()
-        f, axes = plt.subplots()
-        axes.plot(mat)
-        plt.xticks(list(range(len(angles))), angles)
-        #space out xticks.  From stackoverflow # 6682784
-        for n, label in enumerate(axes.xaxis.get_ticklabels()):
-            if n % 2 != 0:
-                label.set_visible(False)
-        
-        f.suptitle('Tomo Y rotation vs max CC')
-        f.savefig(os.path.join(out_dir, 'whole_tomo_rotation.png'))
-        plt.close()
-
-    
-    if subdegree:
-        #make a list of angles +/- 0.5 degrees from bestphi.  
-        #have to add remainder of e.g 0.5/0.2 if subdegree = 0.2
-        #0.5%0.2 returns 0.09999999999999998, scale 10 times and then divide
-        angles = np.arange(bestphi*10 - 8 + 5%(subdegree*10),
-                           bestphi*10 + 8 + 5%(subdegree*10),
-                           subdegree*10)/10
-        mat = np.zeros(len(angles))
-        ccs = []
-        rot_ref = np.zeros((len(angles), ref.shape[0], ref.shape[1]))
-
-        for x in range(len(angles)):
-            r = rotate(ref, angles[x], (0,1), reshape = False)
-            rot_ref[x] = r        
-            cc = ncc(query, r, limit, 1, outfile=False)   
-            ccs.append(cc)
-            mat[x] = cc.max()
-#        plt.figure()
-#        plt.plot(mat)
-        pkpos, pkh = find_peaks(mat, np.min(mat))
-        pkh = pkh['peak_heights']
-        
-        #this shouldn't happen, but in case there are no peaks
-        #(probably blank image), return no rotation
-        if pkh.size == 0:
-            bestphi = angles[int(len(angles)//2)]
-        else:
-            bestphi = angles[pkpos[np.where(pkh == pkh.max())]]
-        #bestphi = np.max(find_peaks(mat, np.min(mat))[0])
-     
-        
-    return bestphi, mat, rot_ref, ccs
+    angles = np.arange(-angrange//2, angrange//2 + 1)    
+    #trimming helps with edge artefacts due to rotation
+    if edge:
+        query = query[edge:-edge, edge:-edge]
+  
+    bestphi = rotate_and_cc(angles)
+    if refine:
+        angles = np.linspace(bestphi - 0.5, bestphi + 0.5, 11)
+        bestphi = rotate_and_cc(angles)
+    return np.round(bestphi, decimals = 2)
 
 def deal_with_excludelist(ali, tlt, defocus_file, xf, excludelist, 
                           base_name, rec_dir, out_dir):
@@ -4142,6 +4111,97 @@ def prepare_prm(prm, ite, tom_n, out_dir, base_name, st, new_prm_dir,
             
     os.chdir(cwd)
     return peet_bin, new_prmpath, r_apix
+
+def combined_fsc_halves(prm1, prm2, tom_n, out_dir, ite,
+                        combine_all = False):
+    """
+    combines model files and motive lists split for fsc
+    """
+    def mod_and_csv(prm, ite = 2):
+        """get motls and modfiles from prm, check if they exist and convert
+        to abspath
+        """
+        prmdir, prmname = os.path.split(prm)
+        if isinstance(prm, str):
+            prm = PEETPRMFile(prm)
+        motls = prm.get_MOTLs_from_ite(ite)
+        if not isfile(motls[0]):
+            os.chdir(prmdir)
+        if not isfile(motls[0]):
+            if os.path.isabs(motls[0]):
+                tmotl = os.path.split(motls[0])[-1]
+            else:
+                tmotl = motls[0]
+            tmotl = ('_').join(tmotl.split('_')[:-1]) + '_Iter*.csv'
+            last_motl =  glob.glob(tmotl)[-1]
+            ite = int(last_motl.split('_')[-1].strip('Iter.csv'))
+            motls = prm.get_MOTLs_from_ite(ite)        
+
+        if not os.path.isabs(motls[0]):
+            for x in range(len(motls)):
+                motls[x] = realpath(motls[x])
+
+        modfiles = prm.prm_dict['fnModParticle']
+        if not os.path.isabs(modfiles[0]):
+            for x in range(len(modfiles)):
+                modfiles[x] = realpath(modfiles[x])
+
+        return motls, modfiles
+
+    if not isdir(out_dir):
+        os.makedirs(out_dir)
+
+    motls1, modfiles1 = mod_and_csv(prm1, ite)
+    motls2, modfiles2 = mod_and_csv(prm2, ite)
+
+    new_mods = []
+    new_motls = []
+    if combine_all:
+        tom_numbers = np.arange(len(modfiles1))
+    else:
+        tom_numbers = np.arange(tom_n -1, tom_n)
+    for x in tom_numbers:
+        fname = ('_').join(os.path.split(modfiles1[x])[1].split('_')[:-1])
+        outmod = join(out_dir, fname + '_combined.mod')
+        outcsv = join(out_dir, fname + '_combined.csv')
+        new_mods.append(outmod)
+        new_motls.append(outcsv)
+
+        #read in csv halves and interleave
+        csv1 = PEETMotiveList(motls1[x])
+        csv2 = PEETMotiveList(motls2[x])
+        new_arr = np.zeros((len(csv1) + len(csv2), 20))
+        new_arr[::2] = csv1
+        new_arr[1::2] = csv2
+        #zero offsets
+        new_arr[:, 10:13] = 0.
+
+        #add to csv and renumber
+        new_csv = PEETMotiveList()
+        for y in range(len(new_arr)):
+            new_csv.add_pcle(new_arr[y])
+        new_csv.renumber()
+        new_csv.write_PEET_motive_list(outcsv)
+    
+        #combine models
+        mod1 = PEETmodel(modfiles1[x]).get_all_points()
+        mod2 = PEETmodel(modfiles2[x]).get_all_points()
+        mod1 += csv1.get_all_offsets()
+        mod2 += csv2.get_all_offsets()
+        new_arr = np.zeros((len(mod1) + len(mod1), 3))
+        new_arr[::2] = mod1
+        new_arr[1::2] = mod2
+        new_mod = PEETmodel()
+        for y in range(len(new_arr)):    
+            new_mod.add_point(0, 0, new_arr[y])
+        new_mod.write_model(outmod)
+    
+    if combine_all:
+        return new_mods[tom_n - 1], new_motls[tom_n - 1]
+    else:
+        return new_mods[0], new_motls[0]
+
+
 
 def get_resolution(fsc, fshells, cutoff, apix = False, fudge_ctf = True,
                    get_area = 'cutoff'):

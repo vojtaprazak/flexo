@@ -92,12 +92,18 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
     if iters > 1:
         #force model coordinates on input tomogram.  This is done to compensate
         #for origin offset during iterations
-        nmodel_file = join(out_dir, base_name + '_peet.mod')
-#        check_output('imodtrans -I %s %s %s'
-#                     % (tomo, model_file, nmodel_file), shell = True)
-        run_generic_process(['imodtrans', '-I', tomo, model_file, nmodel_file])
-        if isfile(nmodel_file):
-            model_file = nmodel_file
+        
+        
+        #this should no longer be needed:
+#         nmodel_file = join(out_dir, base_name + '_peet.mod')
+# #        check_output('imodtrans -I %s %s %s'
+# #                     % (tomo, model_file, nmodel_file), shell = True)
+#         run_generic_process(['imodtrans', '-I', tomo, model_file, nmodel_file])
+#         if isfile(nmodel_file):
+#             model_file = nmodel_file
+            
+            
+            
 #        VP 19/10/2020 defocus_file is already defined this way in verify_inputs
 #        if iters_done > 1 and excludelist:    
 #            defocus_file = join(rec_dir, base_name + '.defocus')
@@ -166,10 +172,8 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
     print('Processing particle models.')
     rsorted_pcls, reprojected_mod = rotate_model(tomo, full_tomo,
             ali, base_name, model_file, csv, rec_dir, out_dir, tlt, tomo_size,
-            model_file_binning, False, var_str)     
-#    excludelist_mask = np.isin(
-#                range(rsorted_pcls.shape[0]), excludelist, invert = True)    
-
+            model_file_binning, False, var_str)
+    
 
     print('Generating reference tilt series.')
     if not non_overlapping_pcls:  

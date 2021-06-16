@@ -62,17 +62,18 @@ for iters_done in range(curr_iter, iters + 1):
         if iters_done > 1:
             rec_dir = join(starting_out_dir, 'iteration_%s' %
                            str(iters_done - 1))
-    if not globalXYZ:
-        #if local alignments have been used to generate original tomogram then 
-        #globalXYZ will always be turned off
-        #they will be off if only one iteration is run, or if it's the final iteration
-        #with multiple iterations it should be turned on for PEET model to match
-        if iters == 1:
-            globalXYZ = False
-        elif iters_done == iters - 1:
-            globalXYZ = False
-        else:
-            globalXYZ = True
+    # if not globalXYZ:
+        #VP 16/6/2021 this needs more thought, for now, disable
+    #     #if local alignments have been used to generate original tomogram then 
+    #     #globalXYZ will always be turned off
+    #     #they will be off if only one iteration is run, or if it's the final iteration
+    #     #with multiple iterations it should be turned on for PEET model to match
+    #     if iters == 1:
+    #         globalXYZ = False
+    #     elif iters_done == iters:
+    #         globalXYZ = False
+    #     else:
+    #         globalXYZ = True
     if curr_iter == iters_done and args.just_flexo:
         startTime = time.time()
         exec(compile(open(args.just_flexo).read(), args.just_flexo, 'exec'))
@@ -96,7 +97,7 @@ for iters_done in range(curr_iter, iters + 1):
         exec(compile(open(ffile).read(), ffile, 'exec'))
     
     
-    res = just_flexo(
+    res, model_file, csv = just_flexo(
             #paths
             rec_dir, out_dir, base_name, defocus_file, tomo, 
             ali, tlt, xf, localxf, reprojected_mod, st, orig_rec_dir,
@@ -271,7 +272,7 @@ gpr min/max scale probably needs to be tweaked based on averaging results... but
 ## PEET parameter file(s) for FSC determination.  If one is specified, it will be split. 
 #prm = '/raid/fsj/grunewald/vojta/nec/I12a/peet_capsids/run1/bin6/run3_global_new_tomo/pentons_i4/run1/remdup1_6_cc15/c_fromIter7_remdup1.0.prm'
 #prm2 = False
-#tom_n = 1
+#tom_n = 1 #from one
 #ite = 0
 # PEET search parameters: Translation search radius, phi/psi/theta max and step
 #search_rad = False # [int or tuple of 3 ints] use False for defaults

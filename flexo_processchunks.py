@@ -19,6 +19,7 @@ from definite_functions_for_flexo import (run_processchunks, csv_sync,
     p_shifts_to_model_points, format_align, format_newst, format_tilt,
     imodscript, match_tomos, reconstruct_binned_tomo,
     run_generic_process, run_split_peet, plot_fsc, prepare_prm,
+    combined_fsc_halves,
     extracted_particles
     #get_apix_and_size
     )
@@ -514,5 +515,10 @@ def just_flexo(
     print('Running PEET...')
     res = parser_peet_fsc(peet_dir, prm1, prm2, fsc1d, fsc2d)
     
-    return res
+    combined_fsc_dir = os.path.join(peet_dir, 'combined')
+    new_mod, new_csv = combined_fsc_halves(prm1, prm2, tom_n,
+                    #assuming only one iteration is done for fsc
+                                           combined_fsc_dir, 2)
+    
+    return res, new_mod, new_csv
 
