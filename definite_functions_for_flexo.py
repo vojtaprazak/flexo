@@ -482,7 +482,8 @@ def verify_inputs(rec_dir, base_name, out_dir, defocus_file,
 def rotate_model(tomo, full_tomo, ali, base_name,
                  model_file, csv, rec_dir, out_dir, tlt,
                  tomo_size, model_file_binning, skelly_model = False,
-                 add_tilt_params = 'skip'):
+                 add_tilt_params = 'skip',
+                 out_fid_name = 'reprojected_fid.mod'):
     """
     model_file_binning is the binning of model file relative to tomogram.
     I.e. a model that's twice the size of specified tomogram is bin 0.5.
@@ -493,7 +494,7 @@ def rotate_model(tomo, full_tomo, ali, base_name,
     
     #model for particle extraction
     #modpath, modname = split(model_file)
-    reprojected_mod = join(out_dir, 'reprojected_fid.mod')
+    reprojected_mod = join(out_dir, out_fid_name)
 #    binmod = join(out_dir, 'bin_' + modname)
     binmod = join(out_dir, 'bin_%s.mod' % base_name)
 
@@ -544,14 +545,14 @@ def rotate_model(tomo, full_tomo, ali, base_name,
                 ' -ProjectModel %s') % (ali, reprojected_mod,
                                        tlt, tomo_size[2], tmp_mod)
                 ]
-    #add_tilt_params = 'skip'
-    #warnings.warn('add tilt params disabled')
+
+                                        
     
     if np.any(add_tilt_params != 'skip'):
         for y in range(len(add_tilt_params)):
             tilt_str.append(add_tilt_params[y])     
     check_output(('').join(tilt_str), shell = True)
-    print(('').join(tilt_str))
+    
     rawmod = PEETmodel(reprojected_mod).get_all_points()
     max_tilt = int(np.round(max(rawmod[:,2])+1, decimals = 0))
     rsorted_pcls = np.array([np.array(rawmod[x::max_tilt])
@@ -2492,7 +2493,10 @@ def format_align(out_dir, base_name, ali, tlt, binning, fid_model,
                  axiszshift, xf, separate_group,
                  fidn, n_patches, global_only, globalXYZ, OFFSET,
                  excludelist = False,
-                 com_ext = ''):
+                 com_ext = '',
+                 RotOption = 1,
+                 TiltOption = 2,
+                 MagOption = 1):
     overlap = 0.5
     base_output = abspath(join(out_dir, base_name))
     output_model = str(base_output) + '.3dmod'
@@ -2565,15 +2569,12 @@ def format_align(out_dir, base_name, ali, tlt, binning, fid_model,
                 f.write('\nAngleOffset %s' % OFFSET[0]) 
             except:
                 f.write('\nAngleOffset %s' % OFFSET)         
-        f.write('\nRotOption\t1') 
+        f.write('\nRotOption\t%s' % RotOption) 
         f.write('\nRotDefaultGrouping\t5') 
-        f.write('\nTiltOption\t2')
-        f.write('\nTiltOption\t0')
-        
-        
+        f.write('\nTiltOption\t%s' % TiltOption)
         f.write('\nTiltDefaultGrouping\t5')
         f.write('\nMagReferenceView\t%s' % zero_tlt)
-        f.write('\nMagOption\t1')
+        f.write('\nMagOption\t%s' % MagOption)
         f.write('\nMagDefaultGrouping\t4')
         f.write('\nXStretchOption\t%s' % xstretch)
         f.write('\nSkewOption\t0')
@@ -2587,7 +2588,7 @@ def format_align(out_dir, base_name, ali, tlt, binning, fid_model,
         f.write('\nMetroFactor\t0.25')
         f.write('\nMaximumCycles\t1000')
         f.write('\nKFactorScaling\t1')
-        f.write('\nNoSeparateTiltGroups\t1')
+        f.write('\nNoSeparateTiltGroups\t3')
         f.write('\nAxisZShift\t%s' % axiszshift)
         f.write('\nShiftZFromOriginal\t1')
         f.write('\nShiftZFromOriginal\t1')
@@ -2613,6 +2614,9 @@ def format_align(out_dir, base_name, ali, tlt, binning, fid_model,
             f.write('\nLocalMagDefaultGrouping\t7')
             f.write('\nLocalXStretchOption\t0')
             f.write('\nLocalXStretchDefaultGrouping\t7')
+            f.write('\LocalXTiltOption\t3')
+            f.write('\LocalXTiltDefaultGrouping\t6')
+      
             f.write('\nLocalSkewOption\t0')
             f.write('\nLocalSkewDefaultGrouping\t11')
             f.write('\nNumberOfLocalPatchesXandY\t%s,%s' % (n_patches[0], n_patches[1]))
@@ -2846,16 +2850,16 @@ def get_tomo_transform(ref, query, angrange, transform = 'rotation',
         xrot = np.array(xrot[xrot != np.nan])
 
         #remake flexo tomogram with corrected rotation
-        if out_dir:
-            f, axes = plt.subplots()
-            f.suptitle('relative tomogram rotation')
-            axes.plot(yrot, label = 'Y rotation')
-            axes.plot(xrot, label = 'X rotation')
-            axes.legend()
-            axes.set_xlabel('strip number')
-            axes.set_ylabel('rotation [degrees]')
-            f.savefig(join(out_dir, 'tomogram_rotation.png'))  
-            plt.close()
+        # if out_dir:
+        #     f, axes = plt.subplots()
+        #     f.suptitle('relative tomogram rotation')
+        #     axes.plot(yrot, label = 'Y rotation')
+        #     axes.plot(xrot, label = 'X rotation')
+        #     axes.legend()
+        #     axes.set_xlabel('strip number')
+        #     axes.set_ylabel('rotation [degrees]')
+        #     f.savefig(join(out_dir, 'tomogram_rotation.png'))  
+        #     plt.close()
 
         return np.median(yrot), np.median(xrot)
 
@@ -2885,24 +2889,24 @@ def get_tomo_transform(ref, query, angrange, transform = 'rotation',
         #xy X shift is much better than xz X shift
         mysh[0] = xsh[0]
         print('xy shift, xz shift %s %s' % (str(xsh), str(mysh)))
-        if out_dir:
+#         if out_dir:
 
-            write_mrc(join(out_dir, 'matchref_ystrips.mrc'), oxz)
-            write_mrc(join(out_dir, 'matchq_ystrips.mrc'), fxz)
+#             write_mrc(join(out_dir, 'matchref_ystrips.mrc'), oxz)
+#             write_mrc(join(out_dir, 'matchq_ystrips.mrc'), fxz)
 
-            f, axes = plt.subplots(2,1, figsize = (6,10))
-            f.suptitle('relative tomogram translation')
-            axes[0].title.set_text('Z shift from Y slices')
-            axes[0].plot(ysh[:, 0])
-            axes[1].title.set_text('X shift from Y slices')
-            axes[1].plot(ysh[:, 1])
-#            axes[2].title.set_text('Z shift from X slices')
-#            axes[2].plot(-xsh[:, 0])
+#             f, axes = plt.subplots(2,1, figsize = (6,10))
+#             f.suptitle('relative tomogram translation')
+#             axes[0].title.set_text('Z shift from Y slices')
+#             axes[0].plot(ysh[:, 0])
+#             axes[1].title.set_text('X shift from Y slices')
+#             axes[1].plot(ysh[:, 1])
+# #            axes[2].title.set_text('Z shift from X slices')
+# #            axes[2].plot(-xsh[:, 0])
 
-            axes[1].set_xlabel('strip number')
-            axes[1].set_ylabel('shift [pixels]')
-            f.savefig(join(out_dir, 'tomogram_translation.png'))  
-            plt.close()
+#             axes[1].set_xlabel('strip number')
+#             axes[1].set_ylabel('shift [pixels]')
+#             f.savefig(join(out_dir, 'tomogram_translation.png'))  
+#             plt.close()
         return mysh
         
 
@@ -3203,7 +3207,9 @@ def run_processchunks(base_name, out_dir, machines, log = False):
 
         total_chunks, chunks_done = 0, 0
         for line in iter(process.stdout.readline, ''.encode()):
-            line = line.decode()
+            if line:
+                #everything is in bytes except for None? confused?
+                line = line.decode()
             # if line == '':
             #     break
             # else:
@@ -3286,6 +3292,7 @@ def run_split_peet(base_name, out_dir, base_name2, out_dir2, machines,
                         iter(process.stdout.readline, ''.encode()),
                         iter(process2.stdout.readline, ''.encode())):
             advance_bar = False
+
             if output1 != None:
                 output1 = output1.decode()
                 write_to_log(c_log1, output1.strip())
@@ -3312,15 +3319,17 @@ def run_split_peet(base_name, out_dir, base_name2, out_dir2, machines,
                 progress_bar(total_chunks, chunks_done)   
             panic_msg = (('').join(['#']*30) + '\n' +
                          'SOMETHING HAS GONE WRONG, DUMPING STDERR, STDOUT:\n')
+
             if process.poll() != None and output1 == None:
+                #poll stil returns integer, not bytes in python3
                 #have to check if there is still output in the PIPE because
                 #of race condition with process.poll()
                 #some processchunks errors return 0 status:
                 #when done, check return status but also if chunks are done
                 if (process.poll() != 0
-                or (process.poll() == 0 and chunks_done1 != total_chunks1)
+                or (process.poll() == 0 and chunks_done1 < total_chunks1)
                 or (process.poll() == 0 and chunks_done1 == 0)):                    
-                    com = process.communicate()
+                    com = [m.decode() for m in process.communicate()]
                     write_to_log(c_log1, 
                                  'Processchunks status %s' % process.poll())
                     write_to_log(c_log1, panic_msg)
@@ -3331,9 +3340,10 @@ def run_split_peet(base_name, out_dir, base_name2, out_dir2, machines,
                     raise ValueError('Processchunks returned non-zero status.')
             if process2.poll() != None and output2 == None:
                 if (process2.poll() != 0
-                or (process2.poll() == 0 and chunks_done2 != total_chunks2)
-                or (process2.poll() == 0 and chunks_done2 == 0)):
-                    com = process2.communicate()
+                or (process2.poll() == 0 and chunks_done2 < total_chunks2)
+                #somehow I've managed to get chunks_done2 > total_chunks2?
+                or (process2.poll() == 0 and chunks_done2 == 0)):                    
+                    com = [m.decode() for m in process2.communicate()]
                     print('#############%s' % str(com))                
                     write_to_log(c_log2, 
                                  'Processchunks status %s' % process2.poll())
@@ -3846,10 +3856,10 @@ def reconstruct_binned_tomo(out_dir, base_name, binning, st, output_xf,
     #ctfcorrect
     if no_ctf_convolution:
         ctf_ali = output_ali
-    else:
         warnings.warn('Ctfcorrection disabled!')
+    else:
         check_output('splitcorrection -m %s ctfcorrection.com' % 
-                     int(np.floor(n_tilts/len(machines))),
+                     max(1, int(np.floor(n_tilts/len(machines)))),
                      shell = True)
         run_processchunks('ctfcorrection', out_dir, machines)
         os.rename(ctf_ali, output_ali)
@@ -3912,6 +3922,7 @@ def prepare_prm(prm, ite, tom_n, out_dir, base_name, st, new_prm_dir,
                         lowcutoff = False, #expect list/tuple
                         refthr = False,
                         tomo = False #if False, default naming used
+                        #if init, using tomograms in prm file
                         ):
     """
     This function is inteded to prepare a set of PRM files for FSC
@@ -4187,6 +4198,9 @@ def combined_fsc_halves(prm1, prm2, tom_n, out_dir, ite,
         mod1 = PEETmodel(modfiles1[x]).get_all_points()
         mod2 = PEETmodel(modfiles2[x]).get_all_points()
         mod1 += csv1.get_all_offsets()
+        print((mod1.shape, csv1.get_all_offsets().shape))       
+        print((mod2.shape, csv2.get_all_offsets().shape))
+        
         mod2 += csv2.get_all_offsets()
         new_arr = np.zeros((len(mod1) + len(mod1), 3))
         new_arr[::2] = mod1
@@ -5403,13 +5417,16 @@ class extracted_particles:
                 self.read_cc_peaks()
             except:
                 raise ValueError(
-                    'No CC data. Use extracted_particles.read_cc_peaks()')             
+                    'No CC data. Use extracted_particles.read_cc_peaks()')     
+            
+            
         self.shift_mask = np.zeros(self.shifts.shape, dtype = bool)
         self.shift_mask[:, :, n_peaks:] = 0 
         
         tree = KDTree(self.model_3d)
         dst, pos = tree.query(self.model_3d,
                               self.num_pcls)
+        
 
     #set minimum number of neighbours to 2
         for x in range(len(dst)):
@@ -5422,6 +5439,7 @@ class extracted_particles:
             cc_dst_mean, cc_dst_std = cc_distance_weight_neighbours(self,
                     pcl_index, dst, pos, n_peaks = n_peaks,
                     cc_weight_exp = cc_weight_exp, cc_weight = True)
+        
             
             tilt_mean = tilt_weighted_mean(cc_dst_mean)
             pcl_mask = score_shifts(self, tilt_mean, pcl_index,
@@ -5435,11 +5453,57 @@ class extracted_particles:
                 if np.isin(pcl_index, plot_pcl_n):
                     plot_weighted_pcl(self, pcl_index, tilt_mean, cc_dst_std,
                               figsize = figsize, out_dir = True)
+        
+        
+        
 
-    def write_fiducial_model(self, ali = False):
+    def write_fiducial_model(self, ali = False, poly = False, order = 3,
+                             smooth_ends = True):
+        
+        def poly_shifts(self, shifts, order, smooth_ends = True):
+                
+            if isinstance(self.tilt_subset, bool):
+                #just going by ccc values
+                self.nice_tilts(zero_tlt = False)
+        
+            if smooth_ends:
+                #use the mean of the ends of the tilt series since they're super noisy
+                nice_plus_end = np.zeros((len(self.tilt_subset) + 2,
+                                          self.num_pcls, 2))
+                nice_plus_end[1:-1] = shifts[self.tilt_subset]
+                nice_plus_end[0] = np.median(shifts[:self.tilt_subset[0] - 1],
+                                             axis = 0)
+                nice_plus_end[-1] = np.median(shifts[:self.tilt_subset[-1] + 1],
+                                             axis = 0)
+                t_shifts = nice_plus_end
+                nice_plus_end = None
+        
+                t_tilts = np.zeros(len(self.tilt_subset) + 2)
+                t_tilts[0] = 0
+                t_tilts[-1] = self.num_tilts
+                t_tilts[1:-1] = self.tilt_subset
+            else:
+                t_shifts = shifts
+                t_tilts = np.arange(self.num_tilts)
+        
+            pfitx = np.polynomial.polynomial.polyfit(t_tilts, t_shifts[..., 0], order)
+            pfity = np.polynomial.polynomial.polyfit(t_tilts, t_shifts[..., 1], order)
+            pevalx = np.polynomial.polynomial.polyval(np.arange(self.num_tilts), pfitx)
+            pevaly = np.polynomial.polynomial.polyval(np.arange(self.num_tilts), pfity)
+            
+            poly_array = np.zeros(shifts.shape)
+            poly_array[..., 0] = pevalx.T
+            poly_array[..., 1] = pevaly.T
+            return poly_array        
+
     
         shifts = self.shifts[self.shift_mask].reshape(self.num_tilts, 
                                                             self.num_pcls, 2)
+        if poly:
+            shifts = poly_shifts(self, shifts, order,
+                                 smooth_ends = smooth_ends)
+        
+        
         shifted_pcls = self.sorted_pcls[:, :, :3]
         shifted_pcls[:, :, :2] = (shifted_pcls[:, :, :2] - shifts)
 

@@ -68,8 +68,14 @@ def just_flexo(
         psimax_step = False,
         thetamax_step = False,
         n_peaks = 100,
-        no_ctf_convolution = False
-        ):
+        no_ctf_convolution = False,
+        RotOption = 1,
+        TiltOption = 2,
+        MagOption = 1,
+        poly = False,
+        poly_order = 3,
+        smooth_ends = True):
+    
     
     
     #turn display off
@@ -272,7 +278,9 @@ def just_flexo(
                                     n_peaks = 5,
                                     cc_weight_exp = 5) 
     
-    outmod_name = particles.write_fiducial_model(ali)
+    outmod_name = particles.write_fiducial_model(ali, poly = poly,
+                                                 order = poly_order,
+                                                 smooth_ends = smooth_ends)
 
 
     #don't know what to do with the .xtlt file. under what circumstances
@@ -283,7 +291,10 @@ def just_flexo(
                             base_name, ali, tlt, tomo_binning,
                             outmod_name, axiszshift,
                             xf, separate_group, fidn, n_patches,
-                            global_only, globalXYZ, OFFSET, excludelist)
+                            global_only, globalXYZ, OFFSET, excludelist,
+                            RotOption = RotOption,
+                            TiltOption = TiltOption,
+                            MagOption = MagOption)
     #OFFSET has to be 0 in tlt.com if it's specified in align.com !
     imodscript('align.com', os.path.realpath(out_dir))
     OFFSET = 0
@@ -310,7 +321,10 @@ def just_flexo(
                             axiszshift,
                             xf, separate_group, fidn, n_patches,
                             global_only, globalXYZ, OFFSET,
-                            excludelist)
+                            excludelist,
+                            RotOption = RotOption,
+                            TiltOption = TiltOption,
+                            MagOption = MagOption)
     #OFFSET has to be 0 in tlt.com if it's specified in align.com !
     imodscript('align.com', os.path.realpath(out_dir))
     OFFSET = 0
@@ -361,10 +375,20 @@ def just_flexo(
             prm2 = join(fsc2d, base_name + '_fromIter%s_cls2.prm' % ite)        
         else: 
             #if PEET was already split for FSC
-            peet_bin, prm1 = prepare_prm(
-                    prm, ite, tom_n, out_dir, base_name, st, fsc1d)        
-            peet_bin2, prm2 = prepare_prm(
-                    prm2, ite, tom_n, out_dir, base_name, st, fsc2d)
+            peet_bin, prm1, peet_apix = prepare_prm(
+                    prm, ite, tom_n, out_dir, base_name, st, fsc1d,
+                    search_rad = search_rad,
+                    phimax_step = phimax_step,
+                    psimax_step = psimax_step,
+                    thetamax_step = thetamax_step,
+                    tomo = init_tomo)
+            peet_bin2, prm2, _ = prepare_prm(
+                    prm2, ite, tom_n, out_dir, base_name, st, fsc2d,
+                    search_rad = search_rad,
+                    phimax_step = phimax_step,
+                    psimax_step = psimax_step,
+                    thetamax_step = thetamax_step,
+                    tomo = init_tomo)
             if peet_bin != peet_bin2:
                 raise ValueError('The two PEET half data-sets do not have the'
                                  + ' same binning.')

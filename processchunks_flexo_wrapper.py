@@ -138,7 +138,13 @@ for iters_done in range(curr_iter, iters + 1):
             phimax_step = phimax_step,
             psimax_step = psimax_step,
             thetamax_step = thetamax_step,
-            no_ctf_convolution = no_ctf_convolution)
+            no_ctf_convolution = no_ctf_convolution,
+            RotOption = RotOption,
+            TiltOption = TiltOption,
+            MagOption = MagOption,
+            poly = poly,
+            poly_order = poly_order,
+            smooth_ends = smooth_ends)
     
     print('Iteration execution time: %s s.' % int(np.round(
                                 (time.time() - startTime ), decimals = 0)))    
@@ -261,7 +267,7 @@ gpr min/max scale probably needs to be tweaked based on averaging results... but
 ## Binning of PEET model file relative to current volume. E.g. if PEET was run with volume binned 2x and the volume for Flexo alignment is binned 4x, model_file_binning = 0.5
 #model_file_binning = 1
 #
-## Volume to be used as reference for particle alignment
+## Volume to be used as reference for particle alignment.  White on black. Typically chimera segmented.
 #average_volume = '/raid/fsj/grunewald/vojta/ribosome_flexo/11/point_tomo/sfs3.mrc'
 ## Binning of reference volume relative current volume.
 #average_volume_binning = 1 #possibly just detect...
@@ -329,6 +335,9 @@ gpr min/max scale probably needs to be tweaked based on averaging results... but
 #thickness_scaling = 0.5
 ## Allow sudden jumps in contours
 #allow_large_jumps = False
+
+
+##tiltalign parameters
 ## Number of patches for IMOD local alignment
 #n_patches = 2,2
 ## Number of fiducials on each surface required for each patch
@@ -338,11 +347,20 @@ gpr min/max scale probably needs to be tweaked based on averaging results... but
 ## Use global XYZ coordinates for local alignment. Only set to False if local alignments were used to generate input tomogram 
 #globalXYZ = False 
 #
+#RotOption = 1 #3 for groupping
+#TiltOption = 2 #5 for groupping
+#MagOption =  #3 for groupping
+
+
 ######### DEV/to be deprecated ########
 ## Apply smoothing to fiducial contours
 #smooth = True #smooth shifts, currently doesn't do anything
 #unreasonably_harsh_filter = False
 #no_ctf_convolution = False
+#poly = False #use polynomial fit to shifts instead of detected
+#poly_order = 3 #order of fitting
+#smooth_ends = True #do not use poly_order > 3 if smooth_ends = True
+
 #
 ######### Running parameters ########
 ## Machines for parallel processing.  Use machines = False to use localhost.  Use ['machine1']*2 + ['machine2']*2 to use 2 cores on machine1 and machine2
