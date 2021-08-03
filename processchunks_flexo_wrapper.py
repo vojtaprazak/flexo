@@ -57,11 +57,19 @@ if curr_iter > 1:
                   'tmp_output/tmp_output_file.py'), 'exec'))
 
 for iters_done in range(curr_iter, iters + 1):
+    
+    if not globalXYZ:
+        warnings.warn('Enabling tiltalign FixXYZCoordinates')
+        globalXYZ = True
+    
     if iters > 1:
         out_dir = join(starting_out_dir, 'iteration_%s' % iters_done)
         if iters_done > 1:
             rec_dir = join(starting_out_dir, 'iteration_%s' %
                            str(iters_done - 1))
+            if iters_done == iters and global_only:
+                print('Enabling local alignment for the last iteration.')
+                global_only = False
     # if not globalXYZ:
         #VP 16/6/2021 this needs more thought, for now, disable
     #     #if local alignments have been used to generate original tomogram then 
@@ -89,7 +97,8 @@ for iters_done in range(curr_iter, iters + 1):
                                   average_volume_binning,
                                   lamella_model, use_init_ali,
                                   orthogonal_subtraction,
-                                  d_orth, n_orth)
+                                  d_orth, n_orth,
+                                  noisy_ref = noisy_ref)
 
 #        flexo_model_from_peet will finish by running processchunks, sync file 
 #        will execute just_flexo
@@ -97,7 +106,7 @@ for iters_done in range(curr_iter, iters + 1):
         exec(compile(open(ffile).read(), ffile, 'exec'))
     
     
-    res, model_file, csv = just_flexo(
+    res, model_file, csv, prm, prm2 = just_flexo(
             #paths
             rec_dir, out_dir, base_name, defocus_file, tomo, 
             ali, tlt, xf, localxf, reprojected_mod, st, orig_rec_dir,
@@ -142,9 +151,7 @@ for iters_done in range(curr_iter, iters + 1):
             RotOption = RotOption,
             TiltOption = TiltOption,
             MagOption = MagOption,
-            poly = poly,
-            poly_order = poly_order,
-            smooth_ends = smooth_ends)
+            poly = poly)
     
     print('Iteration execution time: %s s.' % int(np.round(
                                 (time.time() - startTime ), decimals = 0)))    
@@ -306,7 +313,7 @@ gpr min/max scale probably needs to be tweaked based on averaging results... but
 ## When inspecting tilt series in 3dmod.  Was data collected from the first tilt to the left or right?
 #orderL = True #if True, tilts are filtered from zerotlt to 0, then zerotlt to max
 ## Pre-exposure
-#pre_exposure = 0
+#pre_exposure = 0 #100e for ~20 A cutoff, 200e ~ 30 A
 ## Dose per tilt (E-/A^2)
 #dose = 0
 #
@@ -345,11 +352,11 @@ gpr min/max scale probably needs to be tweaked based on averaging results... but
 ## Disable local alignment
 #global_only = True
 ## Use global XYZ coordinates for local alignment. Only set to False if local alignments were used to generate input tomogram 
-#globalXYZ = False 
+#globalXYZ = False #do not turn this on, it's possible it should ALWAYS be off...but who knows
 #
 #RotOption = 1 #3 for groupping
 #TiltOption = 2 #5 for groupping
-#MagOption =  #3 for groupping
+#MagOption =  1 #3 for groupping
 
 
 ######### DEV/to be deprecated ########
@@ -358,9 +365,7 @@ gpr min/max scale probably needs to be tweaked based on averaging results... but
 #unreasonably_harsh_filter = False
 #no_ctf_convolution = False
 #poly = False #use polynomial fit to shifts instead of detected
-#poly_order = 3 #order of fitting
-#smooth_ends = True #do not use poly_order > 3 if smooth_ends = True
-
+#noisy_ref = False #add reprojected tomo to plotback and use as reference
 #
 ######### Running parameters ########
 ## Machines for parallel processing.  Use machines = False to use localhost.  Use ['machine1']*2 + ['machine2']*2 to use 2 cores on machine1 and machine2

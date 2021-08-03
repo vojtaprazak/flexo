@@ -756,6 +756,19 @@ def make_and_reproject_plotback(base_name, out_dir, average_volume, tomo_size,
     check_output('alterheader -d %s,%s,%s %s' %
         (apix, apix, apix/float(tomo_binning), plotback_ali_path), shell = True)
     return plotback_path, plotback_ali_path
+
+def fit_pts_to_plane(voxels):  
+    """voxels, n by 3"""
+    #https://math.stackexchange.com/questions/99299
+    #/best-fitting-plane-given-a-set-of-points
+    xy1 = (np.concatenate([voxels[:, :-1],
+           np.ones((voxels.shape[0], 1))], axis=1))
+    z = voxels[:, -1].reshape(-1, 1)
+    fit = np.matmul(np.matmul(
+            np.linalg.inv(np.matmul(xy1.T, xy1)), xy1.T), z)
+    errors = z - np.matmul(xy1, fit)
+    residual = np.linalg.norm(errors)
+    return fit, residual
     
 
 def lame_mask(surface_model, tomo_size, out_mask = False, plot_planes = False,
@@ -769,20 +782,9 @@ def lame_mask(surface_model, tomo_size, out_mask = False, plot_planes = False,
                     the 2 surfaces are identified by the Kmeans of the point Z
                     coordinates.
     tomo_size [list of 3 ints] - XYZ (of tomo.rec).
-    rtox [bool] has tomo been rotated around x?
+    rotx [bool] has tomo been rotated around x?
     Returns a masked tomogram with the same orientation as tomo_full.rec
     """
-    def fit_pts_to_plane(voxels):  
-        #https://math.stackexchange.com/questions/99299
-        #/best-fitting-plane-given-a-set-of-points
-        xy1 = (np.concatenate([voxels[:, :-1],
-               np.ones((voxels.shape[0], 1))], axis=1))
-        z = voxels[:, -1].reshape(-1, 1)
-        fit = np.matmul(np.matmul(
-                np.linalg.inv(np.matmul(xy1.T, xy1)), xy1.T), z)
-        errors = z - np.matmul(xy1, fit)
-        residual = np.linalg.norm(errors)
-        return fit, residual
     
     def def_plane(fit, tomo_size):
         X, Y = np.meshgrid(
@@ -1528,11 +1530,16 @@ def filter_tilts_butter_p(ali, dose, apix):
     BPimg = fft.ifft2(fft.ifftshift(FFTimg * window)).real
     return BPimg
 
-def butter_filter(img, lowpass, apix):
+def butter_filter(img, lowpass, apix, padding = 0):
+    if padding:
+        img = np.pad(img, ((padding, padding), (padding, padding)),
+                     'linear_ramp', end_values=(np.mean(img), np.mean(img)))
     box = img.shape[1], img.shape[0]
     window = butterworth_filter(lowpass, box, apix, order = 4) #lowpass box apix
     FFTimg = fft.fftshift(fft.fft2(img))
     BPimg = fft.ifft2(fft.ifftshift(FFTimg * window)).real
+    if padding:
+        BPimg = BPimg[padding:-padding, padding:-padding]
     return BPimg
 
 def dose_list(ali, zerotlt, dose, orderL, dosesym = False,
@@ -1572,7 +1579,8 @@ def dose_list(ali, zerotlt, dose, orderL, dosesym = False,
 
 def ctf_convolve_andor_dosefilter_wrapper(ali, zerotlt, dose, apix, V = 300000,
   Cs = 27000000, wl = 0.01968697007561453, ampC = 0.07, ps = 0, defocus = 0,
-  butter_order = 4, dosesym = False, orderL = True, pre_exposure = 0):
+  butter_order = 4, dosesym = False, orderL = True, pre_exposure = 0,
+  no_ctf_convolution = False, padding = 5):
     """  
     Can convolute with CTF and dosefilter (butter) at the same step
     OR
@@ -1607,19 +1615,25 @@ def ctf_convolve_andor_dosefilter_wrapper(ali, zerotlt, dose, apix, V = 300000,
                   pre_exposure = pre_exposure, return_freq = True)
         for x in range(len(ali)):   
             ali[x] = ctf_convolve_andor_butter(ali[x], apix, V, Cs, wl,
-                       ampC, ps, lowfreqs[x], defocus[x], butter_order)
+                       ampC, ps, lowfreqs[x], defocus[x], butter_order,
+                       no_ctf_convolution = no_ctf_convolution,
+                       padding = padding)
     else:
     #skip dosefilter
         lowfreqs = 0
         for x in range(len(ali)):      
             ali[x] = ctf_convolve_andor_butter(ali[x], apix, V, Cs, wl,
-                           ampC, ps, lowfreqs, defocus[x], butter_order)   
+                           ampC, ps, lowfreqs, defocus[x], butter_order,
+                           no_ctf_convolution = no_ctf_convolution,
+                           padding = padding)   
     return ali
     
 
 def ctf_convolve_andor_butter(inp, apix, V = 300000.0, Cs = 27000000.0,
                               wl = 0.01968697007561453, ampC = 0.07, ps = 0,
-                              lowpass = 0, defocus = 0, butter_order = 6):
+                              lowpass = 0, defocus = 0, butter_order = 6,
+                              no_ctf_convolution = False,
+                              padding = 5):
     """Convolute with CTF, phase flip and bandpass at the same time
     (saves ffting back and forth)
     Intended for a single image
@@ -1632,10 +1646,14 @@ def ctf_convolve_andor_butter(inp, apix, V = 300000.0, Cs = 27000000.0,
         defocus [int/float] [angstrom]
         ps - lets not bother with that... 0
         lowpass [float] [spatial freq]
+        
     """
+    if padding:
+        inp = np.pad(inp, ((padding, padding), (padding, padding)), 'linear_ramp',
+                    end_values=(np.mean(inp), np.mean(inp)))
     (Nx, Ny) = inp.shape
     CTF = 1
-    if defocus:
+    if defocus and not no_ctf_convolution:
         Dx = np.float128(1)/np.float128(Nx*apix)
         Dy = np.float128(1)/np.float128(Ny*apix)
         x = np.arange(-Dx * Nx/2, Dx * Nx/2, Dx, dtype = 'float32') 
@@ -1649,8 +1667,10 @@ def ctf_convolve_andor_butter(inp, apix, V = 300000.0, Cs = 27000000.0,
     FFTimg = fft.fftshift(fft.fft2(inp))
     filtered = fft.ifft2(fft.ifftshift(\
                             ((FFTimg * CTF)) * window)).real
-    if defocus:
-        filtered = filtered * -1.     
+    if defocus and not no_ctf_convolution:
+        filtered = filtered * -1.   
+    if padding:
+        filtered = filtered[padding:-padding, padding:-padding]
     return filtered
 
 ##############################################################################
@@ -1823,19 +1843,7 @@ def g2d(centre_x, centre_y, size, centre_bias):
     #a =  np.exp(-4*(np.log(2)*xy**2))/fwhm**2
     return  np.exp(-(xy**2)/2*c**2)
 
-def c_mask(size, centre_y, centre_x, distance): 
-    """
-    Circular mask centered on centre_y, centre_x
-    """
-    #EDIT VP 11/11/2020 centre_values was unused
-    #centre_values = (centre_y, centre_x) #Y, X
-    shift = (size//2) - centre_y, (size//2) - centre_x
-    x = np.arange(-size//2 + shift[0], size//2 + shift[0], 1)
-    y = np.arange(-size//2 + shift[1], size//2 + shift[1], 1)
-    xx, yy = np.meshgrid(x,y)
-    xy = np.sqrt(xx**2 + yy**2)
-    mxy = xy <= distance
-    return mxy
+
 
 def compare_ccs(pcl_n, ref, query, top, bot, shifts, interp, limit,
                 output_dir = False, debug = 0, out_name = False):
@@ -2250,7 +2258,19 @@ def create_circular_mask(box, radius = 0):
     mask = dist_from_center <= radius
     return mask
     
-
+def c_mask(size, centre_y, centre_x, distance): 
+    """
+    Circular mask centered on centre_y, centre_x
+    """
+    #EDIT VP 11/11/2020 centre_values was unused
+    #centre_values = (centre_y, centre_x) #Y, X
+    shift = (size//2) - centre_y, (size//2) - centre_x
+    x = np.arange(-size//2 + shift[0], size//2 + shift[0], 1)
+    y = np.arange(-size//2 + shift[1], size//2 + shift[1], 1)
+    xx, yy = np.meshgrid(x,y)
+    xy = np.sqrt(xx**2 + yy**2)
+    mxy = xy <= distance
+    return mxy
 
 ##############################################################################
 def csv_sync(out_dir, chunk_base, return_sorted = False):
@@ -2584,11 +2604,11 @@ def format_align(out_dir, base_name, ali, tlt, binning, fid_model,
         f.write('\nXTiltOption\t4')
         f.write('\nXTiltDefaultGrouping\t2000')
         f.write('\nResidualReportCriterion\t3.0')
-        f.write('\nSurfacesToAnalyze\t2')
+        f.write('\nSurfacesToAnalyze\t1') #used to be 2...
         f.write('\nMetroFactor\t0.25')
         f.write('\nMaximumCycles\t1000')
         f.write('\nKFactorScaling\t1')
-        f.write('\nNoSeparateTiltGroups\t3')
+        f.write('\nNoSeparateTiltGroups\t1') #used to be 3?
         f.write('\nAxisZShift\t%s' % axiszshift)
         f.write('\nShiftZFromOriginal\t1')
         f.write('\nShiftZFromOriginal\t1')
@@ -2614,8 +2634,8 @@ def format_align(out_dir, base_name, ali, tlt, binning, fid_model,
             f.write('\nLocalMagDefaultGrouping\t7')
             f.write('\nLocalXStretchOption\t0')
             f.write('\nLocalXStretchDefaultGrouping\t7')
-            f.write('\LocalXTiltOption\t3')
-            f.write('\LocalXTiltDefaultGrouping\t6')
+            f.write('\nLocalXTiltOption\t3')
+            f.write('\nLocalXTiltDefaultGrouping\t6')
       
             f.write('\nLocalSkewOption\t0')
             f.write('\nLocalSkewDefaultGrouping\t11')
@@ -2911,13 +2931,14 @@ def get_tomo_transform(ref, query, angrange, transform = 'rotation',
         
 
 def match_tomos(tomo_binning, out_dir, base_name, rec_dir, how_tiny, tomo_size,
-                copy_orig = False, fakesirt = 0):
+                fakesirt = 0, use_corr = True, niters = 3, plot = True):
     
     """
     returns translation and rotation between two tomograms:
         1) extracts parameters from rec_dir and out_dir comfiles
         2) makes (binned) versions
         3) checks rotation and translation by comparing strips of each tomo
+             or use 3D  cc (corrsearch3d), use_corr = True
     How tiny: additional binning relative to input tomo
     works fine at bin 16 (60 apix), accurate to ~3 unbinned pixels and 0.2 degrees
     copy_orig [str] path to correctly binned ref tomo for matching
@@ -2929,14 +2950,8 @@ def match_tomos(tomo_binning, out_dir, base_name, rec_dir, how_tiny, tomo_size,
     bin_orig_ali = join(out_dir,'matchref_' + base_name + '.ali')
     bin_flexo_ali = join(out_dir,'matchq_' + base_name + '.ali')
     out_full_tomo = abspath(join(out_dir, 'matchq_' + base_name + '_full.rec'))
-#    out_tomo = abspath(join(out_dir, 'matchq_' + base_name + '.rec'))
     tiny_orig_full =  abspath(join(
                             out_dir, 'matchref_' + base_name + '_full.rec'))    
-#    tiny_orig =  abspath(join(out_dir, 'matchref_' + base_name + '.rec'))
-
-    #tiny_size = np.array(get_binned_size(tomo_size, how_tiny)[0])
-
-
     #first, get initial tomogram binned:
     #read_comfiles output: 0 st, 1 xf, 2 ali, 3 tlt, 4 thickness,
         #5 global_xtilt, 6 localxf, 7 excludelist, 8 OFFSET, 9 SHIFT,
@@ -2949,13 +2964,7 @@ def match_tomos(tomo_binning, out_dir, base_name, rec_dir, how_tiny, tomo_size,
                 tiny_orig_full, fakesirt, '_orig')
     imodscript('newst_orig.com', realpath(out_dir))  
     imodscript('tilt_orig.com', realpath(out_dir))  
-#        check_output("clip rotx %s %s" % (tiny_orig_full, tiny_orig), shell = True)
-
-#deprecate copy_orig
-#    else:
-#        if not isfile(copy_orig):
-#            os.symlink(copy_orig, tiny_orig_full)
-
+    
     #make flexo tomo:
     fp = read_comfiles(out_dir)
     format_newst(base_name, out_dir, fp[0], fp[1], out_bin, tomo_size,
@@ -2965,75 +2974,190 @@ def match_tomos(tomo_binning, out_dir, base_name, rec_dir, how_tiny, tomo_size,
                 out_full_tomo, fakesirt)
     imodscript('newst.com', realpath(out_dir))  
     imodscript('tilt.com', realpath(out_dir))  
-#    check_output("clip rotx %s %s" % (out_full_tomo, out_tomo), shell = True)
-    
-    
-    
+
     #check that tomogram sizes match:
     apix, tiny_orig_size = get_apix_and_size(tiny_orig_full)
     apix, tiny_size = get_apix_and_size(out_full_tomo)
-#    print 'match_tomos: tomogram size after binning %s' % tiny_size
     size_match = np.subtract(tiny_size, tiny_orig_size) != (0,  0, 0)
     if np.any(size_match):
         if np.any(size_match > 2):
             raise ValueError
         else:
             tiny_size = tiny_orig_size  
-    #read into memory and rotate around x
-    ref = deepcopy(mrcfile.open(out_full_tomo).data)
-    ref = np.rot90(ref, k = 1, axes = (0,1))
-    query = deepcopy(mrcfile.open(tiny_orig_full).data)
-    query = np.rot90(query, k = 1, axes = (0,1))
-    #check rotation
-    add_yrot, add_xtilt = get_tomo_transform(ref, query, angrange, 'rotation',
-                                             how_tiny, out_dir)
-    OFFSET = np.round((fp[8] - add_yrot), decimals = 1)
-    global_xtilt = np.round(( float(fp[5]) - add_xtilt), decimals = 1)
+            
+    if use_corr:
+        #faster, better written?, roughly same accuracy
+        SHIFT = fp[9]
+        OFFSET = fp[8]
+        global_xtilt = float(fp[5])
+        for i in range(1, niters + 1):
+            nSHIFT, nOFFSET, nglobal_xtilt = corrsearch(tiny_orig_full,
+                                                     out_full_tomo, out_dir,
+                                                     iter_n = i,
+                                                     plot = plot)
+    
+            SHIFT = np.round(SHIFT - nSHIFT*tomo_binning, decimals = 2)
+            OFFSET = np.round((OFFSET - nOFFSET), decimals = 2)
+            global_xtilt = np.round((global_xtilt - nglobal_xtilt), decimals = 2)
+            print('iter_n %s' % i)
+            print('corrsearch calc SHIFT, OFFSET, global_xtilt %s,%s,%s'
+                  % (nSHIFT, nOFFSET, nglobal_xtilt*tomo_binning))
+            print('corrsearch curr SHIFT, OFFSET, global_xtilt %s,%s,%s'
+                  % (SHIFT, OFFSET, global_xtilt))
+            format_tilt(base_name, out_dir, bin_flexo_ali, fp[3], out_bin, op[4],
+                        global_xtilt, OFFSET, SHIFT, fp[6], fp[12], fp[13], fp[7],
+                        out_full_tomo, fakesirt)
+            if i != niters:
+                imodscript('tilt.com', realpath(out_dir)) 
+    
+        return SHIFT, OFFSET, global_xtilt        
+    else:
+        
+        #read into memory and rotate around x
+        ref = deepcopy(mrcfile.open(out_full_tomo).data)
+        ref = np.rot90(ref, k = 1, axes = (0,1))
+        query = deepcopy(mrcfile.open(tiny_orig_full).data)
+        query = np.rot90(query, k = 1, axes = (0,1))
+        #check rotation
+        add_yrot, add_xtilt = get_tomo_transform(ref, query, angrange, 'rotation',
+                                                 how_tiny, out_dir)
+        OFFSET = np.round((fp[8] - add_yrot), decimals = 1)
+        global_xtilt = np.round(( float(fp[5]) - add_xtilt), decimals = 1)
+        
+        
+        #re-make flexo tomo with adjusted rotations:
+        format_tilt(base_name, out_dir, bin_flexo_ali, fp[3], out_bin, op[4],
+                    global_xtilt, OFFSET, fp[9], fp[6], fp[12], fp[13], fp[7],
+                    out_full_tomo, fakesirt)
+        imodscript('newst.com', realpath(out_dir))  
+        imodscript('tilt.com', realpath(out_dir))  
+    #    check_output("clip rotx %s %s" % (out_full_tomo, out_tomo), shell = True)
+        ref = deepcopy(mrcfile.open(out_full_tomo).data)
+        ref = np.rot90(ref, k = 1, axes = (0,1))
+        
+        gshift = get_tomo_transform(ref, query, angrange, 'translation', how_tiny,
+                                    out_dir)
+        SHIFT = fp[9] - gshift*tomo_binning
+    
+        print('first round offset, xtilt, shift %s %s %s' % (OFFSET, global_xtilt, SHIFT))
+    
+        #check rotation and shift again
+        format_tilt(base_name, out_dir, bin_flexo_ali, fp[3], out_bin, op[4],
+                    global_xtilt, OFFSET, SHIFT, fp[6], fp[12], fp[13], fp[7],
+                    out_full_tomo, fakesirt)
+        imodscript('newst.com', realpath(out_dir))  
+        imodscript('tilt.com', realpath(out_dir))  
+    #    check_output("clip rotx %s %s" % (out_full_tomo, out_tomo), shell = True)
+        ref = deepcopy(mrcfile.open(out_full_tomo).data)
+        ref = np.rot90(ref, k = 1, axes = (0,1))
+    
+        add_yrot, add_xtilt = get_tomo_transform(ref, query, angrange, 'rotation',
+                                                 how_tiny, out_dir)
+        OFFSET = np.round((OFFSET - add_yrot), decimals = 1)
+        global_xtilt = np.round((global_xtilt - add_xtilt), decimals = 1)
+        gshift = get_tomo_transform(ref, query, angrange, 'translation', how_tiny,
+                                    out_dir)
+        SHIFT = SHIFT - gshift*tomo_binning 
+        print('second round offset, xtilt, shift %s %s %s' % (OFFSET, global_xtilt, SHIFT))
+        print('Calculated shift at bin %s: X %s, Z %s' % (out_bin, SHIFT[0]/out_bin,
+                                               SHIFT[1]/out_bin))
+        print('Calculated tilt angle and xtilt offset %s, %s' % (
+                                                add_yrot, add_xtilt))
+        
+        return SHIFT, OFFSET, global_xtilt
+
+def corrsearch(refpath, querypath, out_dir, trim = (10, 10, 10),
+                  num_patches = (10, 10, 3),
+                  outname = 'out_corrsearch3d.txt', rotx = False,
+                  plot = True,
+                  figsize = (12,5),
+                  iter_n = False):
+    """
+    refpath [str]
+    querypath [str]
+    out_dir [str]
+    trim [tuple of 3 ints] trim edges around X,Y,Z
+    num_patches [tuple of 3 ints] number of patches in X,Y,Z
+    outname [str] name of corrsearch3d txt file
+    rotx [bool] has the tomogram been rotated around X (clip rotx)
+    """
+    
+    out_file = join(abspath(out_dir), outname)
+    _, tomo_size = get_apix_and_size(refpath)
+    
+    if not rotx:
+        trim = trim[0], trim[2], trim[1]
+        num_patches = num_patches[0], num_patches[2], num_patches[1]
+    
+    patch_s = int(np.min(tomo_size)/2.5)
+    cmd = ['corrsearch3d',
+           '-ref', refpath, #ref
+           '-align', querypath, #query
+           '-o', out_file, #transform txt file
+           '-size', '%s,%s,%s' % (patch_s, patch_s, patch_s), #size of patches
+           '-number', '%s,%s,%s' % num_patches, #number of patches
+           '-x', '%s,%s' % (trim[0], tomo_size[0] - trim[0]),
+           '-y', '%s,%s' % (trim[1], tomo_size[1] - trim[1]),
+           '-z', '%s,%s' % (trim[2], tomo_size[2] - trim[2]),
+           '-l', '0.3,0.05'
+          ]
+    run_generic_process(cmd)
+    
+    disp = []
+    with open(out_file) as f:
+        for x in f.readlines():
+            disp.append(x.split())
+    disp = np.array(disp[1:], dtype = float)
+    if not rotx:
+        #change to xyz coords, dxdydz, ccc
+        disp = disp[:, [0,2,1,3,5,4,6]]
+        tomo_size = tomo_size[[0, 2, 1]]
     
     
-    #re-make flexo tomo with adjusted rotations:
-    format_tilt(base_name, out_dir, bin_flexo_ali, fp[3], out_bin, op[4],
-                global_xtilt, OFFSET, fp[9], fp[6], fp[12], fp[13], fp[7],
-                out_full_tomo, fakesirt)
-    imodscript('newst.com', realpath(out_dir))  
-    imodscript('tilt.com', realpath(out_dir))  
-#    check_output("clip rotx %s %s" % (out_full_tomo, out_tomo), shell = True)
-    ref = deepcopy(mrcfile.open(out_full_tomo).data)
-    ref = np.rot90(ref, k = 1, axes = (0,1))
+    #get rid of 10% of worst CCC
+    min_cc = np.percentile(disp[:,-1], 10)
+    if plot:
+        rejected = disp[disp[:, -1] <= min_cc]
+    disp = disp[disp[:, -1] > min_cc]
+
+    fit, _ = fit_pts_to_plane(disp[:, [0, 1, 5]])
+    #X1, Y1, Z1 = def_plane(fit, (np.max(disp[:, [0, 1, 5]], axis = 0)))
+    rX, rY = np.rad2deg(np.arctan(fit[:2]))
+    OFFSET, global_xtilt = np.rad2deg(np.arctan(fit[:2]))[:, 0]
     
-    gshift = get_tomo_transform(ref, query, angrange, 'translation', how_tiny,
-                                out_dir)
-    SHIFT = fp[9] - gshift*tomo_binning
-
-    print('first round offset, xtilt, shift %s %s %s' % (OFFSET, global_xtilt, SHIFT))
-
-    #check rotation and shift again
-    format_tilt(base_name, out_dir, bin_flexo_ali, fp[3], out_bin, op[4],
-                global_xtilt, OFFSET, SHIFT, fp[6], fp[12], fp[13], fp[7],
-                out_full_tomo, fakesirt)
-    imodscript('newst.com', realpath(out_dir))  
-    imodscript('tilt.com', realpath(out_dir))  
-#    check_output("clip rotx %s %s" % (out_full_tomo, out_tomo), shell = True)
-    ref = deepcopy(mrcfile.open(out_full_tomo).data)
-    ref = np.rot90(ref, k = 1, axes = (0,1))
-
-    add_yrot, add_xtilt = get_tomo_transform(ref, query, angrange, 'rotation',
-                                             how_tiny, out_dir)
-    OFFSET = np.round((OFFSET - add_yrot), decimals = 1)
-    global_xtilt = np.round((global_xtilt - add_xtilt), decimals = 1)
-    gshift = get_tomo_transform(ref, query, angrange, 'translation', how_tiny,
-                                out_dir)
-    SHIFT = SHIFT - gshift*tomo_binning 
-    print('second round offset, xtilt, shift %s %s %s' % (OFFSET, global_xtilt, SHIFT))
-
+    SHIFT = np.median(disp[:, [3, 5]], axis = 0)
     
-    print('Calculated shift at bin %s: X %s, Z %s' % (out_bin, SHIFT[0]/out_bin,
-                                           SHIFT[1]/out_bin))
-    print('Calculated tilt angle and xtilt offset %s, %s' % (
-                                            add_yrot, add_xtilt))
     
-    return SHIFT, OFFSET, global_xtilt
+    if plot:
+        def line_in_plane(X, Y, fit):
+            return X*fit[0] + Y*fit[1] + fit[2]
+        lx = line_in_plane(np.arange(tomo_size[0]), int(tomo_size[1]/2), fit)
+        ly = line_in_plane(int(tomo_size[0]/2), np.arange(tomo_size[1]),fit)
+                          
+        f, ax = plt.subplots(1,2, figsize = figsize)
+        f.suptitle('Relative tomogram rotation')
+        ax[0].scatter(disp[:, 0], disp[:, 5], alpha = 0.3, label = 'dZ shift')
+        ax[0].scatter(rejected[:, 0], rejected[:, 5], alpha = 0.3,
+                      label = 'rejected', c = 'r')
+        ax[0].plot(lx, linewidth = 3, label = 'best fit')
+        ax[0].title.set_text('Tilt around Y axis, %.02f deg' % OFFSET)
+        ax[0].set(xlabel = 'X coordinate [pixels]', ylabel = 'dZ [pixels]')
+        
+        ax[1].scatter(disp[:, 1], disp[:, 5], alpha = 0.3, label = 'dZ shift')
+        ax[1].scatter(rejected[:, 1], rejected[:, 5], alpha = 0.3,
+                      label = 'rejected', c = 'r')
+        ax[1].plot(ly, linewidth = 3, label = 'best fit')
+        ax[1].title.set_text('Tilt around X axis, %.02f deg' % global_xtilt)
+        ax[1].set(xlabel = 'Y coordinate [pixels]', ylabel = 'dZ [pixels]')
 
+        ax[1].legend()
+        if iter_n:
+            plot_name = 'tomo_rotation%02d.png' % iter_n
+        else:
+            plot_name = 'tomo_rotation.png'
+        plt.savefig(join(abspath(out_dir), plot_name))
+        plt.close()
+    return SHIFT, -OFFSET, -global_xtilt
 
 #############################################################################
 
@@ -3968,18 +4092,23 @@ def prepare_prm(prm, ite, tom_n, out_dir, base_name, st, new_prm_dir,
     """
     prmdir, prmname = os.path.split(prm)
     prm = PEETPRMFile(prm)
-    motls = prm.get_MOTLs_from_ite(ite)   
+
+    
+    motls, modfiles = mod_and_csv(join(prmdir, prmname), 2)
     cwd = os.getcwd()
 #    new_peet_dir = join(out_dir, 'peet')
     os.chdir(prmdir)
-    if not os.path.isabs(motls[0]):
-        for x in range(len(motls)):
-            motls[x] = realpath(motls[x])
+    
+    #this should now be performed by mod_and_csv()
+    #motls = prm.get_MOTLs_from_ite(ite)   
+    # if not os.path.isabs(motls[0]):
+    #     for x in range(len(motls)):
+    #         motls[x] = realpath(motls[x])
    
-    modfiles = prm.prm_dict['fnModParticle']
-    if not os.path.isabs(modfiles[0]):
-        for x in range(len(modfiles)):
-            modfiles[x] = realpath(modfiles[x])
+    # modfiles = prm.prm_dict['fnModParticle']
+    # if not os.path.isabs(modfiles[0]):
+    #     for x in range(len(modfiles)):
+    #         modfiles[x] = realpath(modfiles[x])
             
     reference = prm.prm_dict['reference']
     reference = check_refpath(reference)
@@ -4038,7 +4167,7 @@ def prepare_prm(prm, ite, tom_n, out_dir, base_name, st, new_prm_dir,
     #assuming Flexo tomogram is being used 
     trange = get_tiltrange(join(out_dir, 'tilt.log'))
     trange = [trange for x  in range(len(tomo))]
-        
+    
 
     new_prm = prm.deepcopy()
     new_prm.prm_dict['fnModParticle'] = mod
@@ -4048,6 +4177,11 @@ def prepare_prm(prm, ite, tom_n, out_dir, base_name, st, new_prm_dir,
     new_prm.prm_dict['fnOutput'] = base_name
     new_prm.prm_dict['reference'] = reference
     new_prm.prm_dict['maskType'] = mask
+    
+    #get rid of spherical sampling if it's in the prm
+    new_prm.prm_dict['sampleSphere'] = 'none'
+    new_prm.prm_dict['sampleInterval'] = 'NaN'
+    
     
     if isinstance(phimax_step, bool):
         phimax_step = 0, 1
@@ -4123,41 +4257,57 @@ def prepare_prm(prm, ite, tom_n, out_dir, base_name, st, new_prm_dir,
     os.chdir(cwd)
     return peet_bin, new_prmpath, r_apix
 
+def mod_and_csv(prm, ite = 2):
+    """get motls and modfiles from prm, check if they exist and convert
+    to abspath
+    attempt to find the last iteration csv, not the specified iteration
+    """
+    cwd = os.getcwd()
+    prmdir, prmname = os.path.split(prm)
+    if isinstance(prm, str):
+        prm = PEETPRMFile(prm)
+    motls = prm.get_MOTLs_from_ite(ite)
+    if not isfile(motls[0]):
+        os.chdir(prmdir)
+    if not isfile(motls[0]):
+        if os.path.isabs(motls[0]):
+            tmotl = os.path.split(motls[0])[-1]
+        else:
+            tmotl = motls[0]
+        tmotl = ('_').join(tmotl.split('_')[:-1]) + '_Iter*.csv'
+        last_motl =  glob.glob(tmotl)
+        if len(last_motl) > 0:
+            last_motl = last_motl[-1]
+            ite = int(last_motl.split('_')[-1].strip('Iter.csv'))
+            motls = prm.get_MOTLs_from_ite(ite)   
+        else:
+            if ite == 0:
+                #if there are no csv files with ite 0 then that's a problem
+                raise Exception('No MOTLS found %s'
+                                % join(prmdir, prmname))
+            else:
+                motls, modfiles = mod_and_csv(join(prmdir, prmname), 0)
+                return motls, modfiles
+     
+
+    if not os.path.isabs(motls[0]):
+        for x in range(len(motls)):
+            motls[x] = realpath(motls[x])
+
+    modfiles = prm.prm_dict['fnModParticle']
+    if not os.path.isabs(modfiles[0]):
+        for x in range(len(modfiles)):
+            modfiles[x] = realpath(modfiles[x])
+    os.chdir(cwd)
+    return motls, modfiles
+
 def combined_fsc_halves(prm1, prm2, tom_n, out_dir, ite,
                         combine_all = False):
     """
     combines model files and motive lists split for fsc
+    tom_n [int] numbered from one
+    combine_all [bool] combine and return paths for all MOTLs and all mods
     """
-    def mod_and_csv(prm, ite = 2):
-        """get motls and modfiles from prm, check if they exist and convert
-        to abspath
-        """
-        prmdir, prmname = os.path.split(prm)
-        if isinstance(prm, str):
-            prm = PEETPRMFile(prm)
-        motls = prm.get_MOTLs_from_ite(ite)
-        if not isfile(motls[0]):
-            os.chdir(prmdir)
-        if not isfile(motls[0]):
-            if os.path.isabs(motls[0]):
-                tmotl = os.path.split(motls[0])[-1]
-            else:
-                tmotl = motls[0]
-            tmotl = ('_').join(tmotl.split('_')[:-1]) + '_Iter*.csv'
-            last_motl =  glob.glob(tmotl)[-1]
-            ite = int(last_motl.split('_')[-1].strip('Iter.csv'))
-            motls = prm.get_MOTLs_from_ite(ite)        
-
-        if not os.path.isabs(motls[0]):
-            for x in range(len(motls)):
-                motls[x] = realpath(motls[x])
-
-        modfiles = prm.prm_dict['fnModParticle']
-        if not os.path.isabs(modfiles[0]):
-            for x in range(len(modfiles)):
-                modfiles[x] = realpath(modfiles[x])
-
-        return motls, modfiles
 
     if not isdir(out_dir):
         os.makedirs(out_dir)
@@ -4181,12 +4331,26 @@ def combined_fsc_halves(prm1, prm2, tom_n, out_dir, ite,
         #read in csv halves and interleave
         csv1 = PEETMotiveList(motls1[x])
         csv2 = PEETMotiveList(motls2[x])
+        
         new_arr = np.zeros((len(csv1) + len(csv2), 20))
-        new_arr[::2] = csv1
-        new_arr[1::2] = csv2
+        if len(csv1) != len(csv2):
+            #in case the two MOTLs are not the same lenght
+            #place the remainder of the longer MOTL at the end
+            shorter = min(len(csv1), len(csv2))
+            if len(csv1) < len(csv2):
+                remainder = csv2[len(csv1):]
+            else:
+                remainder = csv1[len(csv2):]
+            new_arr[:shorter*2][::2] = csv1[:shorter]
+            new_arr[:shorter*2][1::2] = csv2[:shorter]
+            new_arr[shorter*2:] = remainder
+        else:
+            new_arr[::2] = csv1
+            new_arr[1::2] = csv2
+
         #zero offsets
         new_arr[:, 10:13] = 0.
-
+        
         #add to csv and renumber
         new_csv = PEETMotiveList()
         for y in range(len(new_arr)):
@@ -4198,23 +4362,36 @@ def combined_fsc_halves(prm1, prm2, tom_n, out_dir, ite,
         mod1 = PEETmodel(modfiles1[x]).get_all_points()
         mod2 = PEETmodel(modfiles2[x]).get_all_points()
         mod1 += csv1.get_all_offsets()
-        print((mod1.shape, csv1.get_all_offsets().shape))       
-        print((mod2.shape, csv2.get_all_offsets().shape))
-        
         mod2 += csv2.get_all_offsets()
-        new_arr = np.zeros((len(mod1) + len(mod1), 3))
-        new_arr[::2] = mod1
-        new_arr[1::2] = mod2
+        
+        new_arr = np.zeros((len(mod1) + len(mod2), 3))
+        if len(mod1) != len(mod2):
+            #in case the two models are not the same lenght
+            #place the remainder of the longer model at the end
+            shorter = min(len(mod1), len(mod2))
+            if len(mod1) < len(mod2):
+                remainder = mod2[len(mod1):]
+            else:
+                remainder = mod1[len(mod2):]
+            new_arr[:shorter*2][::2] = mod1[:shorter]
+            new_arr[:shorter*2][1::2] = mod2[:shorter]
+            new_arr[shorter*2:] = remainder
+        else:
+            new_arr[::2] = mod1
+            new_arr[1::2] = mod2   
+            
         new_mod = PEETmodel()
         for y in range(len(new_arr)):    
             new_mod.add_point(0, 0, new_arr[y])
         new_mod.write_model(outmod)
     
     if combine_all:
-        return new_mods[tom_n - 1], new_motls[tom_n - 1]
+        #return new_mods[tom_n - 1], new_motls[tom_n - 1]
+        #not sure why was I returning the equivalent of combine_all = False here
+        
+        return new_mods, new_motls
     else:
         return new_mods[0], new_motls[0]
-
 
 
 def get_resolution(fsc, fshells, cutoff, apix = False, fudge_ctf = True,
@@ -4391,7 +4568,7 @@ def plot_fsc(peet_dirs, out_dir, cutoff = 0.143, apix = False,
 #############################################################################
 
 def ncc(target, probe, max_dist, interp = 1, outfile = False,
-        subpixel = 'full_spline', testnorm = False):
+        subpixel = 'full_spline', testnorm = False, no_norm = True):
     """Outputs normalised cross-correlation map of two images.
     Input arguments:
         target/reference image [numpy array]
@@ -4424,11 +4601,14 @@ def ncc(target, probe, max_dist, interp = 1, outfile = False,
         d1[d1 == 0] = 1
         d2[d2 == 0] = 1
         ncc_fft = cc_fft/d1*d2 
+    elif no_norm:
+        ncc_fft = cc_fft
     else:
         fft_abs = np.absolute(cc_fft)
         fft_abs[fft_abs == 0] = 1 #avoid divison by zero
         ncc_fft = cc_fft/fft_abs
     ncc = ifftshift(ifftn(ncc_fft).real)
+
     
 #    #rectangular data should be handled correctly
 #    if ncc.shape[0] != ncc.shape[1]:
@@ -4539,7 +4719,9 @@ def p_extract_and_cc(
         orthogonal_subtraction = False,
         n_peaks = 100,
         ccmap_filter = 800,
-        no_ctf_convolution = False
+        no_ctf_convolution = False,
+        no_cc_norm = True,
+        padding = 5
         ):
     """
     alis [str or list of str] query image file(s)
@@ -4607,7 +4789,7 @@ def p_extract_and_cc(
         get_pcl_defoci expects input stacks of size = original aligned stack.
         Orthogonal subtraction removes excludelist entries, meaning it can
         be different size.
-
+    padding [int] pad particles for filtering (removes edge artefacts)
     output:
         chunk_base-???_tmp.csv
         output shift values are of ref relative to query, i.e. ref shifted by
@@ -4765,12 +4947,16 @@ def p_extract_and_cc(
             write_mrc(testpcl, query)
             write_mrc(testref, ref)
         
+
         ref = ctf_convolve_andor_dosefilter_wrapper(ref, zero_tlt, dose,
                 apix, V, Cs, wl, ampC, ps, defoci[:, x], butter_order, dosesym,
-                orderL, pre_exposure)
+                orderL, pre_exposure, no_ctf_convolution = no_ctf_convolution,
+                padding = padding)
         query = ctf_convolve_andor_dosefilter_wrapper(query, zero_tlt, dose,
                 apix, V, Cs, wl, ampC, ps, 0, butter_order, dosesym,
-                orderL, pre_exposure)
+                orderL, pre_exposure, no_ctf_convolution = no_ctf_convolution,
+                padding = padding)
+        
         #write out filtered particle stacks
         if test_dir:
             ccmaps = []
@@ -4797,19 +4983,19 @@ def p_extract_and_cc(
                 debug = 1
         #CC########################################
         for y in range(len(ref)):
-            ccmap = ncc(ref[y], query[y], limit, interp)
+            ccmap = ncc(ref[y], query[y], limit, interp, no_norm = no_cc_norm)
             cc_peaks[y] = get_peaks(ccmap, n_peaks)
-            fmap = butter_filter(ccmap, ccmap_filter, apix)
-            fmap *= np.max(ccmap)/np.max(fmap)
+            #fmap = butter_filter(ccmap, ccmap_filter, apix)
+            #fmap *= np.max(ccmap)/np.max(fmap)
             #adjust filtered max to be ~max of ccmap
-            fcc_peaks[y] = get_peaks(fmap, n_peaks)
+            #fcc_peaks[y] = get_peaks(fmap, n_peaks)
             if test_dir:
                 ccmaps.append(ccmap)
         #convert peak coords to shifts from 0
         cc_peaks[:,:,:2] = np.divide(cc_peaks[:,:,:2],
                                     float(interp))-float(limit)
-        fcc_peaks[:,:,:2] = np.divide(fcc_peaks[:,:,:2],
-                                    float(interp))-float(limit)
+        #fcc_peaks[:,:,:2] = np.divide(fcc_peaks[:,:,:2],
+        #                            float(interp))-float(limit)
         tmp_dir = join(out_dir, 'cc_peaks')
         tmp_out = join(tmp_dir, chunk_base + '-%0*d_peaks.npy' %
                        (len(str(n_pcls)), pcl_indices[x]))
@@ -4819,7 +5005,7 @@ def p_extract_and_cc(
         if not isdir(tmp_dir):
             os.makedirs(tmp_dir)
         np.save(tmp_out, cc_peaks)
-        np.save(tmp_out_f, fcc_peaks)
+        #np.save(tmp_out_f, fcc_peaks)
         
         if test_dir:
             ccmap_out = join(test_dir, 'ccmap_%0*d.mrc'
@@ -5358,12 +5544,32 @@ class extracted_particles:
                 
             distance = euc_dist(self.shifts[:, pcl_index, :n_peaks],
                                 wshifts[:, None])
+    
+                
+            
             cc_ratios = (self.cc_values[:, pcl_index, :n_peaks]
                          /self.cc_values[:, pcl_index, 0, None])
-            sc = (distance**dist_weight_exp)/cc_ratios**cc_weight_exp
+            sc = (distance**dist_weight_exp)/cc_ratios**cc_weight_exp     
             
             m = np.array(np.where(sc == np.min(sc, axis = 1)[:, None],
                                       np.ones(sc.shape), 0), dtype = bool)
+
+            if np.any(np.sum(m, axis = 1) > 1):
+                #I don't have a good solution in case if there is more than
+                #one peak left for each map
+                #this *shouldn't* happen very often..........................
+                #I just pick the highest CCC peak.........
+                bummer = np.where(np.sum(m, axis = 1) > 1)
+                mshape = m[bummer[0]].shape
+                tmpm = np.zeros(mshape, dtype = bool)
+                if tmpm.ndim > 1:
+                    tmpm[:, 0] = True
+                else:
+                    tmpm[0] = True
+                m[bummer[0]] =  tmpm
+                warnings.warn('%s maps had more than 1 shift after weighting'
+                              % mshape[0])
+            
             if return_mask:
                 return m
             else:
@@ -5410,8 +5616,15 @@ class extracted_particles:
                 plt.savefig(join(self.out_dir, 'shift_scoring_pcl%0*d.png' % (
                             len(str(self.num_pcls)), pcl_index)))
                 plt.close()                
-
-                
+            
+        #end of 
+        
+        #peak values can be negative when using non-normalised cross-corr
+        #negative values break the math here, shift to positive range
+        #this is not...without issues...
+        if np.min(self.cc_values) <= 0:
+            self.cc_values += -np.min(self.cc_values) + 1
+            
         if isinstance(self.shifts, bool):
             try:
                 self.read_cc_peaks()
@@ -5459,49 +5672,13 @@ class extracted_particles:
 
     def write_fiducial_model(self, ali = False, poly = False, order = 3,
                              smooth_ends = True):
-        
-        def poly_shifts(self, shifts, order, smooth_ends = True):
-                
-            if isinstance(self.tilt_subset, bool):
-                #just going by ccc values
-                self.nice_tilts(zero_tlt = False)
-        
-            if smooth_ends:
-                #use the mean of the ends of the tilt series since they're super noisy
-                nice_plus_end = np.zeros((len(self.tilt_subset) + 2,
-                                          self.num_pcls, 2))
-                nice_plus_end[1:-1] = shifts[self.tilt_subset]
-                nice_plus_end[0] = np.median(shifts[:self.tilt_subset[0] - 1],
-                                             axis = 0)
-                nice_plus_end[-1] = np.median(shifts[:self.tilt_subset[-1] + 1],
-                                             axis = 0)
-                t_shifts = nice_plus_end
-                nice_plus_end = None
-        
-                t_tilts = np.zeros(len(self.tilt_subset) + 2)
-                t_tilts[0] = 0
-                t_tilts[-1] = self.num_tilts
-                t_tilts[1:-1] = self.tilt_subset
-            else:
-                t_shifts = shifts
-                t_tilts = np.arange(self.num_tilts)
-        
-            pfitx = np.polynomial.polynomial.polyfit(t_tilts, t_shifts[..., 0], order)
-            pfity = np.polynomial.polynomial.polyfit(t_tilts, t_shifts[..., 1], order)
-            pevalx = np.polynomial.polynomial.polyval(np.arange(self.num_tilts), pfitx)
-            pevaly = np.polynomial.polynomial.polyval(np.arange(self.num_tilts), pfity)
-            
-            poly_array = np.zeros(shifts.shape)
-            poly_array[..., 0] = pevalx.T
-            poly_array[..., 1] = pevaly.T
-            return poly_array        
 
-    
+        def poly_shifts():
+            pass
+        
         shifts = self.shifts[self.shift_mask].reshape(self.num_tilts, 
                                                             self.num_pcls, 2)
-        if poly:
-            shifts = poly_shifts(self, shifts, order,
-                                 smooth_ends = smooth_ends)
+
         
         
         shifted_pcls = self.sorted_pcls[:, :, :3]

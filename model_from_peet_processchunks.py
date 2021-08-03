@@ -41,7 +41,8 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
                           average_volume_binning = 1, lamella_model = False,
                           use_init_ali = False, orthogonal_subtraction = False,
                           d_orth = 60, n_orth = 6,
-                          threshold = 0.01):
+                          threshold = 0.01,
+                          noisy_ref = False):
     
     """
     Inputs:
@@ -174,8 +175,11 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
             ali, base_name, model_file, csv, rec_dir, out_dir, tlt, tomo_size,
             model_file_binning, False, var_str)
     
-
     print('Generating reference tilt series.')
+    if noisy_ref:
+        non_overlapping_pcls = False
+        use_init_ali = True
+        
     if not non_overlapping_pcls:  
     #fast, simple approach:
     #Makes plotback using all pcls and reproject it into a TS. 
@@ -185,22 +189,36 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
                     model_file, apix, model_file_binning, tomo_binning,
                     tlt, ali, average_volume_binning, False, False, var_str,
                     lamella_mask_path)              
-                        
-
-
 
         reprojected_tomogram_path = join(
                 out_dir, base_name + '_reprojected.ali')
         full_tomo = join(rec_dir, base_name + '_full.rec')
         out_mask = join(out_dir, 'binary_mask.mrc')
         masked_tomo = join(out_dir, 'masked_%s.mrc') % base_name
+        tmp_out = join(
+                out_dir, base_name + '_tmp.ali')
 
-
+        if noisy_ref:
+            reproject_volume(full_tomo, ali, tlt, tomo_size[2],
+                         reprojected_tomogram_path, var_str)
+            #add plotback to reprojected tomo, use as reference
+            run_generic_process(['newstack', '-mea', '0,1',
+                                 reprojected_tomogram_path,
+                                 reprojected_tomogram_path])
+            run_generic_process(['newstack', '-mea', '0,5',
+                                 plotback_ali_path,
+                                 plotback_ali_path])
+            run_generic_process(['clip', 'add', reprojected_tomogram_path,
+                                 plotback_ali_path, tmp_out])
+            os.rename(tmp_out, plotback_ali_path)
+            
+            
         if use_init_ali:
             reprojected_tomogram_path = join(
                 out_dir, base_name + '_initial.ali')         
             
             copyfile(ali, reprojected_tomogram_path)
+
         else:
             #generate mask from plotback
             mask_path = NEW_mask_from_plotback(plotback_path,

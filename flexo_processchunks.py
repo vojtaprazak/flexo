@@ -23,6 +23,7 @@ from definite_functions_for_flexo import (run_processchunks, csv_sync,
     extracted_particles
     #get_apix_and_size
     )
+import warnings
 
 
 def just_flexo(
@@ -73,10 +74,11 @@ def just_flexo(
         TiltOption = 2,
         MagOption = 1,
         poly = False,
-        poly_order = 3,
-        smooth_ends = True):
+        remove_tmp_files = True,
+        no_cc_norm = True):
     
     
+    warnings.warn('CC normalisation off.')#no_cc_norm
     
     #turn display off
     plt.ioff()
@@ -212,6 +214,7 @@ def just_flexo(
             '>orthogonal_subtraction = %s' % orthogonal_subtraction,
             '>n_peaks = %s' % n_peaks,
             '>no_ctf_convolution = %s' % no_ctf_convolution,
+            '>no_cc_norm = %s' % no_cc_norm,
             '>p_extract_and_cc(',
             '>            sub_ali_list,',
             '>            plotback_ali_list,',
@@ -248,7 +251,8 @@ def just_flexo(
             '>            xf,',
             '>            orthogonal_subtraction,',
             '>            n_peaks,',
-            '>            no_ctf_convolution = no_ctf_convolution',
+            '>            no_ctf_convolution = no_ctf_convolution,',
+            '>            no_cc_norm = no_cc_norm',
             '>            )'
             )
                       
@@ -274,14 +278,17 @@ def just_flexo(
     particles.plot_shift_magnitude_v_cc()
     particles.plot_global_shifts()
     
+    #####
+    #plot 10 particles
+    plot_pcl_ind = np.arange(particles.num_pcls)[::int(particles.num_pcls/10)]
+    #####
+    
     particles.pick_shifts_basic_weighting(neighbour_distance = 60,
                                     n_peaks = 5,
-                                    cc_weight_exp = 5) 
+                                    cc_weight_exp = 5,
+                                    plot_pcl_n = plot_pcl_ind) 
     
-    outmod_name = particles.write_fiducial_model(ali, poly = poly,
-                                                 order = poly_order,
-                                                 smooth_ends = smooth_ends)
-
+    outmod_name = particles.write_fiducial_model(ali, poly = poly)
 
     #don't know what to do with the .xtlt file. under what circumstances
     #does tiltalign create it?
@@ -314,7 +321,7 @@ def just_flexo(
     #tomogram (or tomogram from previous iteration)
     SHIFT, OFFSET, global_xtilt = match_tomos(tomo_binning, out_dir,
                             base_name, orig_rec_dir, spec_tiny_size,
-                            tomo_size)
+                            tomo_size, use_corr = True)
     #final align.com
     output_xf, localxf, output_tlt, zfac = format_align(out_dir, base_name,
                             ali, tlt, tomo_binning, outmod_name,
@@ -544,5 +551,17 @@ def just_flexo(
                     #assuming only one iteration is done for fsc
                                            combined_fsc_dir, 2)
     
-    return res, new_mod, new_csv
+    if remove_tmp_files:
+        try:
+            print('Removing temporary files...')
+            rmf = ['mask_??.mrc', 'smooth_mask_??.mrc',
+                             'masked_??.mrc', 'plotback_??.mrc',
+                             'plotback_??.ali', 'subtracted_??.ali']
+            rmf = [join(out_dir, f) for f in rmf]
+            run_generic_process(['rm'] + rmf)
+        except:
+            pass#"temporary"
+
+        
+    return res, new_mod, new_csv, prm1, prm2
 
