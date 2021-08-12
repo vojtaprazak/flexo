@@ -68,7 +68,7 @@ def just_flexo(
         phimax_step = False,
         psimax_step = False,
         thetamax_step = False,
-        n_peaks = 100,
+        n_peaks = 5,
         no_ctf_convolution = False,
         RotOption = 1,
         TiltOption = 2,
@@ -102,7 +102,7 @@ def just_flexo(
                                     excludelist = excludelist,
                                     base_name = base_name,
                                     chunk_base = chunk_base,
-                                    n_peaks = 100,
+                                    n_peaks = n_peaks,
                                     groups = groups,
                                     tilt_angles = tlt)
 
@@ -275,7 +275,7 @@ def just_flexo(
     particles.read_cc_peaks()
     particles.plot_median_cc_vs_tilt()
     particles.plot_particle_med_cc()
-    particles.plot_shift_magnitude_v_cc()
+    particles.plot_shift_magnitude_v_cc(n_peaks = n_peaks)
     particles.plot_global_shifts()
     
     #####
@@ -284,7 +284,7 @@ def just_flexo(
     #####
     
     particles.pick_shifts_basic_weighting(neighbour_distance = 60,
-                                    n_peaks = 5,
+                                    n_peaks = n_peaks,
                                     cc_weight_exp = 5,
                                     plot_pcl_n = plot_pcl_ind) 
     

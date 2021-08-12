@@ -32,6 +32,8 @@ from scipy.optimize import minimize
 from scipy.fftpack import fftn, ifftn, fftshift, ifftshift
 from scipy import fftpack as fft
 from scipy import stats
+from scipy.signal import gaussian
+from scipy.ndimage import filters
 from numpy.fft import fftfreq#, fftshift #already defined from scipy
 #from scipy import signal #clash with signal
 from scipy.ndimage.interpolation import zoom, shift, rotate
@@ -3240,7 +3242,16 @@ def kill_process(process, log = False, wait = 10, sig = signal.SIGTERM):
     except:
         print('killpg: Unhandled Exception.')
         raise
-    
+        
+def check_ssh(hostname):
+    process = Popen(['ssh', '-q', hostname, 'exit'])
+    com = process.communicate()
+    poll = process.poll()
+    #print (poll)
+    if poll == 0:
+        pass
+    else:
+        raise Exception('Could not ssh into %s, %s' % (hostname, poll))    
 
 def run_generic_process(cmd, out_log = False, wait = True):
     """
@@ -4568,7 +4579,8 @@ def plot_fsc(peet_dirs, out_dir, cutoff = 0.143, apix = False,
 #############################################################################
 
 def ncc(target, probe, max_dist, interp = 1, outfile = False,
-        subpixel = 'full_spline', testnorm = False, no_norm = True):
+        subpixel = 'full_spline', testnorm = False, no_norm = True,
+        permissive = True):
     """Outputs normalised cross-correlation map of two images.
     Input arguments:
         target/reference image [numpy array]
@@ -4641,20 +4653,25 @@ def ncc(target, probe, max_dist, interp = 1, outfile = False,
             mrc.set_data(np.float16(ncc))
     return ncc
 
-def get_peaks(cc_map, n_peaks = 100):
+def get_peaks(cc_map, n_peaks = 100, return_blank = False):
     """Finds peaks in 2D array.
     Input arguments:
         cc_map [2d array]
         max_peaks [int] maximum number of peaks to be stored. also defines
             size of output array
+        return_blank [bool] return empty array of the expected shape (
+            this is intended to deal with blank query)
     Returns:
         out_peaks [n_peaks by 3 numpy array] 
                 [:,0] peak X coord
                 [:,1] peak Y coord
                 [:,2] peak value
+                [:,3] mask value, i.e. is this a valid shift
     """
-    out_peaks = np.zeros((n_peaks, 3), dtype = float)
-    out_peaks[:,2] = 0  
+    out_peaks = np.zeros((n_peaks, 4), dtype = float)
+    #out_peaks[:,2] = 0
+    if return_blank:
+        return out_peaks
 
     peak_pos = peak_local_max(cc_map, 1)
     if len(peak_pos) == 0:
@@ -4676,6 +4693,9 @@ def get_peaks(cc_map, n_peaks = 100):
         out_peaks[:idx, 0] = peak_pos[:idx, 1]
         out_peaks[:idx, 1] = peak_pos[:idx, 0]
         out_peaks[:idx, 2] = peak_val[:idx]
+    m = np.array(out_peaks[:, 2] != 0, dtype = int)
+    #mask in numerical form
+    out_peaks[..., 3] = m
     return out_peaks
 
 def p_extract_and_cc(     
@@ -4721,7 +4741,8 @@ def p_extract_and_cc(
         ccmap_filter = 800,
         no_ctf_convolution = False,
         no_cc_norm = True,
-        padding = 5
+        padding = 5,
+        ignore_partial = True
         ):
     """
     alis [str or list of str] query image file(s)
@@ -4790,6 +4811,9 @@ def p_extract_and_cc(
         Orthogonal subtraction removes excludelist entries, meaning it can
         be different size.
     padding [int] pad particles for filtering (removes edge artefacts)
+    ignore_partial [bool] reutrn nan array if > 10% of a query is flat
+        
+    
     output:
         chunk_base-???_tmp.csv
         output shift values are of ref relative to query, i.e. ref shifted by
@@ -4921,10 +4945,10 @@ def p_extract_and_cc(
 
 
     for x in range(rsorted_pcls.shape[1]):
-        cc_peaks = np.zeros((rsorted_pcls.shape[0], n_peaks, 3))
-        fcc_peaks = np.zeros((rsorted_pcls.shape[0], n_peaks, 3))
-        #cc_peak shape [number of tilts, number of peaks, 3
-        #(x coord, y coord, peak value)]
+        cc_peaks = np.zeros((rsorted_pcls.shape[0], n_peaks, 4))
+        #fcc_peaks = np.zeros((rsorted_pcls.shape[0], n_peaks, 3))
+        #cc_peak shape [number of tilts, number of peaks, 4
+        #(x coord, y coord, peak value, mask)]
         #fcc_peaks - lowpassed cc maps
         
         #extract particle stacks
@@ -4946,8 +4970,15 @@ def p_extract_and_cc(
             #if not os.path.isfile(testpcl):
             write_mrc(testpcl, query)
             write_mrc(testref, ref)
-        
 
+        partial_list = np.zeros(len(query), dtype = float)        
+        if ignore_partial:
+            #skip CC if > 10% of a query is flat
+            for l in range(len(query)):
+                partial_list[l] = np.max(np.unique(query[l], 
+                                                   return_counts = True)[1])
+                partial_list /= query[0].size
+                
         ref = ctf_convolve_andor_dosefilter_wrapper(ref, zero_tlt, dose,
                 apix, V, Cs, wl, ampC, ps, defoci[:, x], butter_order, dosesym,
                 orderL, pre_exposure, no_ctf_convolution = no_ctf_convolution,
@@ -4983,8 +5014,20 @@ def p_extract_and_cc(
                 debug = 1
         #CC########################################
         for y in range(len(ref)):
-            ccmap = ncc(ref[y], query[y], limit, interp, no_norm = no_cc_norm)
-            cc_peaks[y] = get_peaks(ccmap, n_peaks)
+            if ignore_partial and partial_list[y] > 0.1:
+                ccmap = np.zeros((limit*interp*2, limit*interp*2))
+                cc_peaks[y] = get_peaks(ccmap,
+                                            n_peaks, return_blank = True)
+                
+            elif np.std(query[y]) == 0.:
+                #separate logic checkto save a few ms...
+                ccmap = np.zeros((limit*interp*2, limit*interp*2))
+                cc_peaks[y] = get_peaks(ccmap,
+                                            n_peaks, return_blank = True)                
+            else:
+                ccmap = ncc(ref[y], query[y], limit, interp,
+                            no_norm = no_cc_norm)
+                cc_peaks[y] = get_peaks(ccmap, n_peaks)
             #fmap = butter_filter(ccmap, ccmap_filter, apix)
             #fmap *= np.max(ccmap)/np.max(fmap)
             #adjust filtered max to be ~max of ccmap
@@ -4999,8 +5042,8 @@ def p_extract_and_cc(
         tmp_dir = join(out_dir, 'cc_peaks')
         tmp_out = join(tmp_dir, chunk_base + '-%0*d_peaks.npy' %
                        (len(str(n_pcls)), pcl_indices[x]))
-        tmp_out_f = join(tmp_dir, chunk_base + '-%0*d_f_peaks.npy' %
-                       (len(str(n_pcls)), pcl_indices[x]))
+        #tmp_out_f = join(tmp_dir, chunk_base + '-%0*d_f_peaks.npy' %
+        #               (len(str(n_pcls)), pcl_indices[x]))
         
         if not isdir(tmp_dir):
             os.makedirs(tmp_dir)
@@ -5011,8 +5054,6 @@ def p_extract_and_cc(
             ccmap_out = join(test_dir, 'ccmap_%0*d.mrc'
                        % (len(str(n_pcls)), pcl_indices[x]))        
             write_mrc(ccmap_out, np.array(ccmaps))
-
-
 
 
 def shifts_by_cc(pcl_n, ref, query, limit, interp, tilt_angles,
@@ -5386,6 +5427,8 @@ class extracted_particles:
                                   self.n_peaks, 2))
         self.cc_values = np.zeros((self.num_tilts, self.num_pcls,
                                   self.n_peaks))
+        self.shift_mask = np.zeros((self.num_tilts, self.num_pcls,
+                                  self.n_peaks, 2), dtype = bool)
         
         if out_dir:
             self.out_dir = out_dir
@@ -5405,6 +5448,9 @@ class extracted_particles:
             tmp_arr = np.load(tmp_path)
             self.shifts[:, x] = tmp_arr[:, :, :2]
             self.cc_values[:, x] = tmp_arr[:, :, 2]
+            self.shift_mask[:, x] = np.repeat(tmp_arr[:, :, 3, None],
+                                              2, axis = 2)
+        self.shift_mask = np.array(self.shift_mask, dtype = bool)
         
 #        #mask ccc <= 0
 #        self.cc_values = np.ma.masked_less_equal(self.cc_values, 0)
@@ -5445,18 +5491,33 @@ class extracted_particles:
                     + new_params.x[1])
 
 
-    def pick_shifts_basic_weighting(self, neighbour_distance = 50,
-                                    n_peaks = 5,
-                                    cc_weight_exp = 5,
-                                    plot_pcl_n = False,
-                                    figsize = (12,12)):
-
+    def pick_shifts_basic_weighting(self, neighbour_distance = 70,
+                                        n_peaks = 5,
+                                        cc_weight_exp = 5,
+                                        plot_pcl_n = False,
+                                        z_bias = 3,
+                                        shift_std_cutoff = 3,
+                                        subtract_global_shift = True,
+                                        figsize = (12,12)):
+    
         def weighted_mean(vals, distances, exp = 2, axis = 0, stdev = False):
-            weights = 1/np.array(distances, dtype = float)**exp
-            if not isinstance(vals, np.ndarray):
-                vals = np.array(vals)
-            weighted_mean = (np.sum(vals*weights, axis = axis)/
-                             np.sum(weights, axis = axis))
+    
+            #weights = 1/np.array(distances, dtype = float)**exp
+            #if not isinstance(vals, np.ndarray):
+            #    vals = np.array(vals)
+    
+            weights = 1./distances**exp
+    
+            if isinstance(vals, np.ma.masked_array):
+                #need nominator or denominator to have a mask
+                nom = np.sum(vals*weights, axis = axis)
+                nom_mask = np.sum(np.logical_not(vals.mask), axis = axis)
+                nom = np.ma.masked_where(nom_mask < 2, nom)
+    
+                weighted_mean = nom/np.sum(weights, axis = axis)
+            else:
+                weighted_mean = (np.sum(vals*weights, axis = axis)/
+                                 np.sum(weights, axis = axis))
             if stdev:
                 weighted_stdev = np.sqrt(np.sum(
                     weights*(vals - np.expand_dims(weighted_mean, axis))**2,
@@ -5464,24 +5525,26 @@ class extracted_particles:
                     /(((np.float(vals.shape[axis]) - 1)/vals.shape[axis])
                                             *np.sum(weights, axis = axis))
                                                 )
+                if isinstance(vals, np.ma.masked_array):
+                    weighted_stdev = np.ma.masked_array(weighted_stdev, mask = weighted_mean.mask)
                 return weighted_mean, weighted_stdev
             else:
-                return weighted_mean  
-
-        def cc_distance_weight_neighbours(self, pcl_index, dst, pos,
+                return weighted_mean 
+    
+        def cc_distance_weight_neighbours(shifts, cc_values, pcl_index, dst, pos,
                                           n_peaks = 5, cc_weight_exp = 3,
                                           cc_weight = True):
             """
             Shifts are weighted sequentially be CCC and then (3D) distance from
             neighbouring particles
             """
-
+    
             #pick neighbours within distance limit. First index is pcl_index,
             #filler value is 1 + num_pcls 
             nbr_indices = np.unique(pos[pcl_index][1:])[:-1]
-            nbr_shifts = self.shifts[:, nbr_indices]
+            nbr_shifts = shifts[:, nbr_indices]
             nbr_shifts = nbr_shifts[:, :, :n_peaks]
-            nbr_cccs = self.cc_values[:, nbr_indices]
+            nbr_cccs = cc_values[:, nbr_indices]
             nbr_cccs = nbr_cccs[:, :, :n_peaks]
             nbr_dist = dst[pcl_index][dst[pcl_index] != np.inf][1:]
             
@@ -5495,11 +5558,12 @@ class extracted_particles:
                 #weighted mean of the ccc weighted shifts
                 wmn, wstd = weighted_mean(cc_w_mn, nbr_dist[None, :, None],
                                           axis = 1, stdev = True)
+    
             else:
                 wmn, wstd = weighted_mean(nbr_shifts[:, :, 0],
                             nbr_dist[None, :, None], axis = 1, stdev = True)
             return wmn, wstd
-        
+    
         def tilt_weighted_mean(wshifts, window = 5):
             """
             Rolling weighted mean.
@@ -5520,40 +5584,57 @@ class extracted_particles:
                                                     dtype = int) + window,
                                         np.arange(-1, -1 - hw, -1)))  
             tilt_weighted = np.zeros(wshifts.shape)
+            too_few_values_mask = np.zeros(wshifts.shape, dtype = bool)
             for y in range(len(wshifts)):
                 tmp_dst = tilt_distance[lo_dst_indices[y]:hi_dst_indices[y]]
                 min_idx = max(0, y - hw)
                 max_idx = min(len(wshifts), y + hw + 1)
                 tmp_wshifts = wshifts[min_idx:max_idx]
+                if isinstance(tmp_wshifts, np.ma.masked_array):
+                    #do not return a value if wshift[y] is masked
+                    too_few_values_mask[y] = wshifts.mask[y, 0]
+                    #mask element if there are less than two values to calculate mean
+                    if np.logical_not(tmp_wshifts.mask[..., 0]).sum() < 2:
+                        too_few_values_mask[y] = True
+                    tmp_dst = np.ma.masked_array(tmp_dst, mask = tmp_wshifts.mask[..., 0])
                 tilt_weighted[y] = weighted_mean(tmp_wshifts, tmp_dst[:, None])
+    
+            tilt_weighted = np.ma.masked_array(tilt_weighted, mask = too_few_values_mask)
             return tilt_weighted
-        
-        def score_shifts(self, wshifts, pcl_index, n_peaks = 10, 
+    
+        def score_shifts(shifts, cc_values, wshifts, pcl_index, n_peaks = 10, 
                           cc_weight_exp = 5, dist_weight_exp = 2,
                           return_mask = False):
-            
+    
             """
             Score of shifts from a reference shift (wshift):
                 [euclidian distance]**exp1/[ratio of max CCC]***exp2
-                
+    
             """
-            
+    
             def euc_dist(a, b):
                 return np.sqrt((b[..., 0] - a[..., 0])**2
                                 + (b[..., 1]-a[..., 1])**2)
-                
-            distance = euc_dist(self.shifts[:, pcl_index, :n_peaks],
-                                wshifts[:, None])
     
-                
-            
-            cc_ratios = (self.cc_values[:, pcl_index, :n_peaks]
-                         /self.cc_values[:, pcl_index, 0, None])
+            distance = euc_dist(shifts[:, pcl_index, :n_peaks],
+                                wshifts[:, None])
+            cc_ratios = (cc_values[:, pcl_index, :n_peaks]  #!!!!!!!!!!!!!!!!!!!!! div 0?
+                         /cc_values[:, pcl_index, 0, None])
+    
             sc = (distance**dist_weight_exp)/cc_ratios**cc_weight_exp     
-            
-            m = np.array(np.where(sc == np.min(sc, axis = 1)[:, None],
-                                      np.ones(sc.shape), 0), dtype = bool)
-
+    
+            #using masked arrays to keep any mask that's applied to wshifts
+            m = np.ma.masked_where(sc != np.min(sc, axis = 1)[:, None], np.ones(sc.shape))
+            m = np.logical_not(m.mask)
+    
+            #tilts that were not weighted due to missing wshifts:
+            #pick best ccc
+            if isinstance(wshifts, np.ma.masked_array):
+                m1 = np.ma.masked_where(cc_ratios != np.max(cc_ratios, axis = 1)[:, None],
+                                      np.ones(sc.shape))
+                m1 = np.logical_not(m1.mask)
+                m[wshifts[..., 0].mask] = m1[wshifts[..., 0].mask]
+                
             if np.any(np.sum(m, axis = 1) > 1):
                 #I don't have a good solution in case if there is more than
                 #one peak left for each map
@@ -5567,19 +5648,18 @@ class extracted_particles:
                 else:
                     tmpm[0] = True
                 m[bummer[0]] =  tmpm
-                warnings.warn('%s maps had more than 1 shift after weighting'
-                              % mshape[0])
+                warnings.warn('Pcl %s: %s maps had more than 1 shift after weighting'
+                              % (pcl_index, mshape[0]))
             
             if return_mask:
                 return m
-            else:
-                return self.shifts[:, pcl_index, :n_peaks][m]
-            
+    
         def plot_weighted_pcl(self, pcl_index, tilt_mean, weighted_std, 
                               figsize = (12,12), out_dir = False):
             f, ax = plt.subplots(2, 1, figsize = figsize)
             xvals = np.array(self.tilt_angles, dtype = int)
             for axis in range(2):
+                ax[axis].set_xlim(np.min(self.tilt_angles) - 1, np.max(self.tilt_angles) + 1)
                 ax[axis].axhline(0, c = 'k')
                 #weighted mean
                 ax[axis].scatter(xvals, tilt_mean[:, axis],
@@ -5587,7 +5667,7 @@ class extracted_particles:
                                   label = 'weighted mean')  
                 ax[axis].plot(xvals, tilt_mean[:, axis],
                   c = 'tab:blue', alpha = 0.6)
-                #weighted std
+                
                 ax[axis].fill_between(xvals,
                       tilt_mean[:, axis] + weighted_std[:, axis],
                       tilt_mean[:, axis] - weighted_std[:, axis], alpha = 0.5,
@@ -5600,99 +5680,160 @@ class extracted_particles:
                   c = 'tab:purple', alpha = 0.6)
                 #best scoring shift
                 masked_shift = self.shifts[:, pcl_index, :, axis][
-                                        self.shift_mask[:, pcl_index, :, axis]]
-                ax[axis].scatter(xvals, masked_shift, c = 'tab:orange',
+                                        self.shift_mask[:, pcl_index, :, axis]]   
+                no_vals_mask = np.sum(self.shift_mask[:, pcl_index, :, axis], axis = 1, dtype = bool)
+                masked_xvals = xvals[no_vals_mask]
+                
+                ax[axis].scatter(masked_xvals, masked_shift, c = 'tab:orange',
                   label = 'max scoring shift')  
-                ax[axis].plot(xvals, masked_shift, c = 'tab:orange')
-                  
+                ax[axis].plot(masked_xvals, masked_shift, c = 'tab:orange')
+    
                 ax[axis].legend()
-
+    
                 ax[axis].set_ylabel('shift [pixel]')
                 ax[axis].set_xlabel('tilt angle [degrees]')
-            
+    
             ax[0].set_title('X axis shift')
             ax[1].set_title('Y axis shift')                
             if out_dir:
                 plt.savefig(join(self.out_dir, 'shift_scoring_pcl%0*d.png' % (
                             len(str(self.num_pcls)), pcl_index)))
-                plt.close()                
-            
+                plt.close()       
+                
+        def moving_average(series, sigma=3):
+            b = gaussian(20, sigma)
+            average = filters.convolve1d(series, b/b.sum())
+            var = filters.convolve1d(np.power(series-average, 2), b/b.sum())
+            return var, average
+            #nehalemslab.net/prototype/blog/2014/04/12/how-to-fix-scipys-interpolating-spline-default-behaviour/
+    
         #end of 
-        
+    
         #peak values can be negative when using non-normalised cross-corr
         #negative values break the math here, shift to positive range
         #this is not...without issues...
         if np.min(self.cc_values) <= 0:
             self.cc_values += -np.min(self.cc_values) + 1
-            
+    
         if isinstance(self.shifts, bool):
             try:
                 self.read_cc_peaks()
             except:
                 raise ValueError(
                     'No CC data. Use extracted_particles.read_cc_peaks()')     
-            
-            
-        self.shift_mask = np.zeros(self.shifts.shape, dtype = bool)
+    
+    
+        #self.shift_mask = np.zeros(self.shifts.shape, dtype = bool)
         self.shift_mask[:, :, n_peaks:] = 0 
+        self.shifts = np.ma.masked_array(self.shifts,
+                                          mask = np.logical_not(self.shift_mask))
+        self.cc_values = np.ma.masked_array(self.cc_values,
+                                          mask = np.logical_not(self.shift_mask[..., 0]))    
         
-        tree = KDTree(self.model_3d)
-        dst, pos = tree.query(self.model_3d,
+        tree = KDTree(self.model_3d*[1, 1, z_bias])
+        dst, pos = tree.query(self.model_3d*[1, 1, z_bias],
                               self.num_pcls)
-        
-
-    #set minimum number of neighbours to 2
+    
+        #set minimum number of neighbours to 2
         for x in range(len(dst)):
             farenuf = np.where(dst[x] >= min(neighbour_distance, np.max(dst[x])))[0][0]
             dst[x][max(3, farenuf):] = np.inf
             pos[x][max(3, farenuf):] = dst.shape[0] + 1
-
+    
+        mn_nbrs = np.mean(np.sum(pos != dst.shape[0] + 1, axis = 1) - 1)
+        std_nbrs = np.std(np.sum(pos != dst.shape[0] + 1, axis = 1) - 1)
+        print('Mean number of neighbours for shift weighting %.2f +/- %.2f' 
+              % (mn_nbrs, std_nbrs))
         
+        #remove shifts that are +/- 3x std from median
+        self.nice_tilts(zero_tlt = 20)
+        warnings.warn('zero_tlt hardcoded 20')
+        #nice_tilts will not work with non-normalised CC
+        glob_std = np.std(self.shifts[self.tilt_subset, :, 0], axis = (0,1))
+        glob_med = np.median(self.shifts[:, :, 0], axis = 1)
+        self.shifts = np.ma.masked_greater(self.shifts,
+                            glob_med[:, None, None]+glob_std*shift_std_cutoff)
+        self.shifts = np.ma.masked_less(self.shifts,
+                            glob_med[:, None, None]-glob_std*shift_std_cutoff)
+        
+    
+    
         for pcl_index in range(self.num_pcls):
-            cc_dst_mean, cc_dst_std = cc_distance_weight_neighbours(self,
-                    pcl_index, dst, pos, n_peaks = n_peaks,
-                    cc_weight_exp = cc_weight_exp, cc_weight = True)
-        
             
-            tilt_mean = tilt_weighted_mean(cc_dst_mean)
-            pcl_mask = score_shifts(self, tilt_mean, pcl_index,
+            if subtract_global_shift:
+                tmp_shifts = deepcopy(self.shifts) - glob_med[:, None, None]
+                
+                cc_dst_mean, cc_dst_std = cc_distance_weight_neighbours(
+                        tmp_shifts, self.cc_values,
+                        pcl_index, dst, pos, n_peaks = n_peaks,
+                        cc_weight_exp = cc_weight_exp, cc_weight = True)
+                tilt_mean = np.array((moving_average(cc_dst_mean[:, 0])[1],
+                                  moving_average(cc_dst_mean[:, 1])[1])).T       
+                pcl_mask = score_shifts(tmp_shifts, self.cc_values, tilt_mean,
+                                    pcl_index,
                                     n_peaks = n_peaks,
                                     cc_weight_exp = cc_weight_exp,
                                     return_mask = True)
-            self.shift_mask[:, pcl_index, :n_peaks] = pcl_mask[..., None]
             
+            else:
+                cc_dst_mean, cc_dst_std = cc_distance_weight_neighbours(
+                        self.shifts, self.cc_values,
+                        pcl_index, dst, pos, n_peaks = n_peaks,
+                        cc_weight_exp = cc_weight_exp, cc_weight = True)
+                tilt_mean = tilt_weighted_mean(cc_dst_mean)
+    
+                pcl_mask = score_shifts(self.shifts, self.cc_values, tilt_mean,
+                                    pcl_index,
+                                    n_peaks = n_peaks,
+                                    cc_weight_exp = cc_weight_exp,
+                                    return_mask = True)
+            
+            self.shift_mask[:, pcl_index, :n_peaks] = pcl_mask[..., None]
+    
             #this is the incorrect std to use here, but good enough for eyeballing
             if not isinstance(plot_pcl_n, bool):
                 if np.isin(pcl_index, plot_pcl_n):
                     plot_weighted_pcl(self, pcl_index, tilt_mean, cc_dst_std,
-                              figsize = figsize, out_dir = True)
-        
+                              figsize = figsize, out_dir = True)        
         
         
 
+    
     def write_fiducial_model(self, ali = False, poly = False, order = 3,
                              smooth_ends = True):
 
-        def poly_shifts():
-            pass
+        def compress_masked_array(vals, axis=-1, fill=1000):
+            #https://stackoverflow.com/questions/46354509/transfer-unmasked-elements-from-maskedarray-into-regular-array
+            cnt = vals.mask.sum(axis=axis)
+            shp = vals.shape
+            num = shp[axis]
+            mask = (num - cnt[..., np.newaxis]) > np.arange(num)
+            n = fill * np.ones(shp)
+            n[mask] = vals.compressed()
+            n = np.ma.masked_where(n == fill, n)
+            return n        
         
-        shifts = self.shifts[self.shift_mask].reshape(self.num_tilts, 
-                                                            self.num_pcls, 2)
-
+        shifts = np.ma.masked_array(deepcopy(self.shifts), mask = np.logical_not(self.shift_mask))
+        for m in range(2):
+            shifts[..., m] = compress_masked_array(shifts[..., m])
+    
+        shifts = shifts[:, :, 0]
+        shifted_pcls = np.ma.masked_array(deepcopy(self.sorted_pcls[:, :, :3]),
+                                          mask = np.repeat(shifts.mask[..., 0, None], 3, axis = 2))
         
-        
-        shifted_pcls = self.sorted_pcls[:, :, :3]
         shifted_pcls[:, :, :2] = (shifted_pcls[:, :, :2] - shifts)
-
         outmod = PEETmodel() 
+    
         for p in range(self.num_pcls):
             #I suspect an contour is already created with PEETmodel() instance,
             #no need to add it for the first pcl
             if p != 0:
                     outmod.add_contour(0)        
             for r in range(self.num_tilts):
-                outmod.add_point(0, p, shifted_pcls[r,p])
-                
+                if np.any(shifted_pcls[r, p]):
+                    #np.all would skip tilt 0
+                    outmod.add_point(0, p, shifted_pcls[r,p])
+    
         outmod_name = abspath(join(self.out_dir, 'flexo_ali.fid'))
         outmod.write_model(outmod_name)
     
@@ -5703,10 +5844,10 @@ class extracted_particles:
         return outmod_name
 
 
-    def nice_tilts(self, zero_tlt = False):
+    def nice_tilts(self, zero_tlt = False, min_size = 5):
         #define middle tilts based on middle tilt or median CCC
         if zero_tlt:
-            step = max(5, self.num_tilts/4)
+            step = max(min_size, self.num_tilts//4)
             bot = int(zero_tlt - 1 - (step - 1)//2)
             #zero_tlt is numbered from 1, so take 1 off
             top = int(zero_tlt - 1 + (step - 1)//2 + 1)   
@@ -5715,13 +5856,13 @@ class extracted_particles:
             #pick tilts with the highest median CCCs
             tilt_medians = np.median(self.cc_values[:, :, 0], axis = 1)
             tilt_median_order = np.argsort(tilt_medians)[::-1]
-            num_hi_tilts = int(np.max((3, self.num_tilts/4)))
+            num_hi_tilts = int(np.max((min_size, self.num_tilts/4)))
             gappy = np.sort(tilt_median_order[:num_hi_tilts])
             self.tilt_subset = np.arange(gappy[0], gappy[-1])
 
                     
     def get_shift_magnitude(self, padding_shift = False,
-                            n_peaks = 10, scoring = 'mean'):
+                            n_peaks = 5, scoring = 'mean'):
         """
         get pairwise distances between peaks of neighbouring tilts
         to preserve array shape, the first set of distances are from

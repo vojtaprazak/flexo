@@ -11,10 +11,13 @@ matplotlib.use('Agg')
 
 
 from flexo_processchunks import just_flexo
-from model_from_peet_processchunks import flexo_model_from_peet  
+from model_from_peet_processchunks import flexo_model_from_peet
+from definite_functions_for_flexo import check_ssh
+from subprocess import Popen
 import argparse
 import numpy as np
 from os.path import realpath, join#
+
 import time
 parser = argparse.ArgumentParser(description=("TBD"))
 parser.add_argument('flexo_comfile', help = "")
@@ -56,6 +59,14 @@ if curr_iter > 1:
                   'tmp_output/tmp_output_file.py')).read(), join(out_dir, 'iteration_%s' % str(curr_iter - 1),
                   'tmp_output/tmp_output_file.py'), 'exec'))
 
+ #check ssh                                       
+if isinstance(machines, str):
+    machines = [machines]
+check_ssh(machines[0])
+
+
+
+                                                                 
 for iters_done in range(curr_iter, iters + 1):
     
     if not globalXYZ:
