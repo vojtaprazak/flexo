@@ -427,9 +427,15 @@ def just_flexo(
     #softlink is made to a tilt series, a full tomo and tomo with the correct
     #binning
     
+    
+    #to be fixed
     default_tomo = join(out_dir, base_name + '.rec')
     default_full = join(out_dir, base_name + '_full.rec')
     default_ali = join(out_dir, base_name + '.ali')
+    if not os.path.isfile(default_tomo):
+        default_tomo = join(out_dir, base_name + '_rec.mrc')
+        default_full = join(out_dir, base_name + '_full_rec.mrc')
+        default_ali = join(out_dir, base_name + '_ali.mrc')        
     rel_bin = max(peet_bin, tomo_binning)/float(min(peet_bin, tomo_binning))
     
     #always make lowest binning tomo:

@@ -52,6 +52,7 @@ from matplotlib.patches import Circle
 import signal
 import time
 import warnings
+import datetime
 
 #import timeit
 if sys.version[0] == '3':
@@ -396,11 +397,14 @@ def verify_inputs(rec_dir, base_name, out_dir, defocus_file,
     if realpath(rec_dir) == realpath(out_dir):
         raise Exception("Trust me, you don't want the output directory to be your original reconstruction directory...")
     if not isdir(out_dir):
-        os.makedirs(out_dir) 
+        os.makedirs(out_dir)
     tomo = join(rec_dir, base_name + '.rec')
     full_tomo = join(rec_dir, base_name + '_full.rec')
     if not isfile(tomo):
-        raise Exception("Original tomogram not found. %s" % tomo)
+        tomo = join(rec_dir, base_name + '_rec.mrc')
+        full_tomo = join(rec_dir, base_name + '_full_rec.mrc')    
+        if not isfile(tomo):
+            raise Exception("Original tomogram not found. %s" % tomo)
     if not isfile(full_tomo):
         raise Exception("Original unrotated tomogram not found. %s" 
                         % full_tomo)
@@ -417,7 +421,11 @@ def verify_inputs(rec_dir, base_name, out_dir, defocus_file,
     if not isfile(st):
         raise Exception("File not found. %s" % st)   
     if not isfile(ali):
-        raise Exception("File not found. %s" % ali)
+        tmp_ali = ali[:-4] + '_ali.mrc'
+        if isfile(tmp_ali):
+            ali = tmp_ali
+        else:
+            raise Exception("File not found. %s" % ali)
     ali_apix, ali_size = get_apix_and_size(ali)
     #check .tlt file
     if not isfile(tlt):
@@ -776,6 +784,9 @@ def fit_pts_to_plane(voxels):
 def lame_mask(surface_model, tomo_size, out_mask = False, plot_planes = False,
               rotx = False):
     """
+    
+    with rotx = True the mask is flipped!!!! clip flipx
+    
     Makes a mask that chops of, e.g. crap on the surface of a lamella.
     surface_model [str] path to MODIFIED tomopitch.mod that fits tomo_full.rec
                     This can be any model with points (regardless of contour
@@ -886,7 +897,11 @@ def NEW_mask_from_plotback(volume, out_mask, grey_dilation_level = 5,
         out_smooth_mask = join(bb, 'smooth_' + out_smooth_mask)
     print('applied mtffilter -3 -l 0.001,0.03 to smooth mask')
     check_output('mtffilter -3 -l 0.001,0.03 %s %s' %
-                 (out_mask, out_smooth_mask), shell = True)   
+                 (out_mask, out_smooth_mask), shell = True)
+    tmp_m = out_smooth_mask + '~'
+    os.rename(out_smooth_mask, tmp_m)
+    check_output('newstack -scale 0,1 %s %s' % (tmp_m, out_smooth_mask))
+    os.remove(tmp_m)
     
     if lamella_model:
         #this will break if the volume is not in "full.rec" orientation
@@ -1128,7 +1143,9 @@ def format_nonoverlapping_alis(out_dir, base_name, average_map, tomo, ali, tlt,
                              average_volume_binning = 1,
                              lamella_mask_path = False,
                              threshold = 0.01,
-                             use_init_ali = False):
+                             use_init_ali = False,
+                             noisy_ref = False,
+                             reprojected_tomogram_path = False):
 
 
     """
@@ -1268,6 +1285,9 @@ def format_nonoverlapping_alis(out_dir, base_name, average_map, tomo, ali, tlt,
         '>average_volume_binning = %s' %  average_volume_binning,
         '>grey_dilation_level = %s' %  grey_dilation_level,
         '>use_init_ali = %s' % use_init_ali,
+        '>noisy_ref = %s' % noisy_ref,
+        '>reprojected_tomogram_path = "%s"' % reprojected_tomogram_path,
+    
         '>chunk_non_overlapping_alis(average_map,',
         '>                           csv_file,',
         '>                           pmodel,',
@@ -1291,7 +1311,9 @@ def format_nonoverlapping_alis(out_dir, base_name, average_map, tomo, ali, tlt,
         '>                           pmodel_bin,',
         '>                           average_volume_binning,',
         '>                           grey_dilation_level,',
-        '>                           use_init_ali)',
+        '>                           use_init_ali,',
+        '>                           noisy_ref,',
+        '>                           reprojected_tomogram_path)',
         )
         comfile = join(out_dir, base_name + '-%03d.com' % x)
         with open(comfile, 'w') as f:
@@ -1309,7 +1331,9 @@ def chunk_non_overlapping_alis(average_map, csv_file, pmodel, group_path,
                                smooth_mask_list, plotback_ali_list, var_str,
                                tomo_size, apix, pmodel_bin, 
                                average_volume_binning, grey_dilation_level,
-                               use_init_ali = False):
+                               use_init_ali = False,
+                               noisy_ref = False,
+                               reprojected_tomogram_path = False):
     """
     This can handle a single tomo as input (still needs to be a list) or
     multiple inputs.
@@ -1317,6 +1341,10 @@ def chunk_non_overlapping_alis(average_map, csv_file, pmodel, group_path,
     groups = np.load(group_path)[group_ids]
     average_map = MapParser_f32_new.MapParser.readMRC(average_map) 
     csv_file = PEETMotiveList(csv_file)
+
+    if isinstance(reprojected_tomogram_path, bool) and noisy_ref:
+        warnings.warng('reprojected_tomogram_path not specified, disabling noisy_ref')
+        noisy_ref = False
 
     print('Backplotting.')
     pmodel = PEETmodel(pmodel).get_all_points()    
@@ -1340,7 +1368,7 @@ def chunk_non_overlapping_alis(average_map, csv_file, pmodel, group_path,
         for a in range(len(groups)):
             reproject_volume(plotback_list[a], ali, tlt, tomo_size[2], 
                              plotback_ali_list[a], var_str)    
-    if not use_init_ali:
+    if not use_init_ali and not noisy_ref:
         print('Generating tomogram masks.')
         for a in range(len(groups)):
             NEW_mask_from_plotback(plotback_list[a], out_mask_list[a],
@@ -1356,6 +1384,18 @@ def chunk_non_overlapping_alis(average_map, csv_file, pmodel, group_path,
             mask_and_reproject(out_dir, base_name, smooth_mask_list[a], tomo, 
                                masked_tomo_list[a], sub_ali_list[a],
                                ali, tlt, tomo_size[2], var_str)
+    elif noisy_ref:
+        for a in range(len(groups)):
+            tmp_out = join(
+                out_dir, base_name + '_tmp%02d.ali' % group_ids[a])
+            run_generic_process(['newstack', '-mea', '0,5',
+                                 plotback_ali_list[a],
+                                 plotback_ali_list[a]])
+            run_generic_process(['clip', 'add', reprojected_tomogram_path,
+                                 plotback_ali_list[a], tmp_out])
+            os.rename(tmp_out, plotback_ali_list[a])
+            
+                    
         
 ##############################################################################
 
@@ -1438,8 +1478,11 @@ def extract_2d_simplified(stack, sorted_pcls, box_size, excludelist = False,
                         stack_size[1], sorted_pcls[y, x, 1] + box_size[1]//2)))           
             if (np.array([x1,y1,x2,y2]) < 0).any():
                 raise ValueError('View %s of particle %s is completely\
-                                 outside the image stack. You should rethink\
-                                 your life choices...' % (y, x))
+                                 outside the image stack.' % (y, x))
+                                 
+            #particles here are extracted by range(len(image_stack)) and not by
+            #tilt index (ssorted_pcls[:, :, 2]). This is because reprojected 
+            #data do not have excludelist views. 
             pcl = mrc[y, y1:y2, x1:x2]
             pcl = pad_pcl(pcl, box_size, sorted_pcls[y,x], stack_size)
             all_pcls[x, y] = pcl  
@@ -1460,7 +1503,9 @@ def extract_2d_simplified(stack, sorted_pcls, box_size, excludelist = False,
 ##############################################################################
 
 def ctf(wl, ampC, Cs, defocus, ps, f):
-    """ returns ctf curve """
+    """ returns ctf curve
+    defocus in angstroms
+    Cs in mm"""
     a = (-np.sqrt(1 - ampC**2)*np.sin(2*np.pi/wl*(defocus*(f*wl)**2/
         2-Cs*(f*wl)**4/4) + ps) - ampC*np.cos(2*np.pi/wl*
         (defocus*(f*wl)**2/2 - Cs*(f*wl)**4/4) + ps))
@@ -1495,8 +1540,6 @@ def butterworth_filter(cutoff, box_size, apix, order = 6,
     else:
         cutoff = 1./cutoff  
     b, a = butter(order, cutoff, t, analog = analog)
-    #VP 20201030 importing butter specifically
-    #b, a = signal.butter(order, cutoff, t, analog = analog)
     
     d = dist_from_centre_map(box_size, apix)
     freq = np.unique(d)
@@ -1580,7 +1623,7 @@ def dose_list(ali, zerotlt, dose, orderL, dosesym = False,
         return doselist
 
 def ctf_convolve_andor_dosefilter_wrapper(ali, zerotlt, dose, apix, V = 300000,
-  Cs = 27000000, wl = 0.01968697007561453, ampC = 0.07, ps = 0, defocus = 0,
+  Cs = 27000000, ampC = 0.07, ps = 0, defocus = 0,
   butter_order = 4, dosesym = False, orderL = True, pre_exposure = 0,
   no_ctf_convolution = False, padding = 5):
     """  
@@ -1616,7 +1659,7 @@ def ctf_convolve_andor_dosefilter_wrapper(ali, zerotlt, dose, apix, V = 300000,
         lowfreqs = dose_list(ali, zerotlt, dose, orderL, dosesym = dosesym,
                   pre_exposure = pre_exposure, return_freq = True)
         for x in range(len(ali)):   
-            ali[x] = ctf_convolve_andor_butter(ali[x], apix, V, Cs, wl,
+            ali[x] = ctf_convolve_andor_butter(ali[x], apix, V, Cs,
                        ampC, ps, lowfreqs[x], defocus[x], butter_order,
                        no_ctf_convolution = no_ctf_convolution,
                        padding = padding)
@@ -1624,7 +1667,7 @@ def ctf_convolve_andor_dosefilter_wrapper(ali, zerotlt, dose, apix, V = 300000,
     #skip dosefilter
         lowfreqs = 0
         for x in range(len(ali)):      
-            ali[x] = ctf_convolve_andor_butter(ali[x], apix, V, Cs, wl,
+            ali[x] = ctf_convolve_andor_butter(ali[x], apix, V, Cs,
                            ampC, ps, lowfreqs, defocus[x], butter_order,
                            no_ctf_convolution = no_ctf_convolution,
                            padding = padding)   
@@ -1632,7 +1675,7 @@ def ctf_convolve_andor_dosefilter_wrapper(ali, zerotlt, dose, apix, V = 300000,
     
 
 def ctf_convolve_andor_butter(inp, apix, V = 300000.0, Cs = 27000000.0,
-                              wl = 0.01968697007561453, ampC = 0.07, ps = 0,
+                              ampC = 0.07, ps = 0,
                               lowpass = 0, defocus = 0, butter_order = 6,
                               no_ctf_convolution = False,
                               padding = 5):
@@ -1650,6 +1693,9 @@ def ctf_convolve_andor_butter(inp, apix, V = 300000.0, Cs = 27000000.0,
         lowpass [float] [spatial freq]
         
     """
+    
+    wl = (12.2639/(V+((0.00000097845)*(V**2)))**0.5)
+    
     if padding:
         inp = np.pad(inp, ((padding, padding), (padding, padding)), 'linear_ramp',
                     end_values=(np.mean(inp), np.mean(inp)))
@@ -2517,7 +2563,7 @@ def format_align(out_dir, base_name, ali, tlt, binning, fid_model,
                  excludelist = False,
                  com_ext = '',
                  RotOption = 1,
-                 TiltOption = 2,
+                 TiltOption = 5,
                  MagOption = 1):
     overlap = 0.5
     base_output = abspath(join(out_dir, base_name))
@@ -3068,18 +3114,17 @@ def match_tomos(tomo_binning, out_dir, base_name, rec_dir, how_tiny, tomo_size,
         
         return SHIFT, OFFSET, global_xtilt
 
-def corrsearch(refpath, querypath, out_dir, trim = (10, 10, 10),
-                  num_patches = (10, 10, 3),
-                  outname = 'out_corrsearch3d.txt', rotx = False,
+def corrsearch(refpath, querypath, out_dir, trim = [10, 10, 10],
+                  outname = 'out_corrsearch3d.txt',
                   plot = True,
                   figsize = (12,5),
-                  iter_n = False):
+                  iter_n = False, rotx = False):
     """
     refpath [str]
     querypath [str]
     out_dir [str]
-    trim [tuple of 3 ints] trim edges around X,Y,Z
-    num_patches [tuple of 3 ints] number of patches in X,Y,Z
+    trim [list of 3 ints] trim edges around X,Y,Z
+    num_patches [list of 3 ints] number of patches in X,Y,Z
     outname [str] name of corrsearch3d txt file
     rotx [bool] has the tomogram been rotated around X (clip rotx)
     """
@@ -3087,9 +3132,10 @@ def corrsearch(refpath, querypath, out_dir, trim = (10, 10, 10),
     out_file = join(abspath(out_dir), outname)
     _, tomo_size = get_apix_and_size(refpath)
     
-    if not rotx:
-        trim = trim[0], trim[2], trim[1]
-        num_patches = num_patches[0], num_patches[2], num_patches[1]
+    for x in range(len(trim)):
+        trim[x] = min(trim[x], tomo_size[x]//10)
+
+    num_patches = np.array(np.round(tomo_size/np.min(tomo_size))*3, dtype = int)
     
     patch_s = int(np.min(tomo_size)/2.5)
     cmd = ['corrsearch3d',
@@ -3097,7 +3143,7 @@ def corrsearch(refpath, querypath, out_dir, trim = (10, 10, 10),
            '-align', querypath, #query
            '-o', out_file, #transform txt file
            '-size', '%s,%s,%s' % (patch_s, patch_s, patch_s), #size of patches
-           '-number', '%s,%s,%s' % num_patches, #number of patches
+           '-number', '%s,%s,%s' % (num_patches[0], num_patches[1], num_patches[2]),#number of patches
            '-x', '%s,%s' % (trim[0], tomo_size[0] - trim[0]),
            '-y', '%s,%s' % (trim[1], tomo_size[1] - trim[1]),
            '-z', '%s,%s' % (trim[2], tomo_size[2] - trim[2]),
@@ -3273,6 +3319,7 @@ def run_generic_process(cmd, out_log = False, wait = True):
         if out_log:
             if isfile(out_log):
                 os.rename(out_log, out_log + '~')
+            write_to_log(out_log,  str(datetime.datetime.now()) + '\n')
             write_to_log(out_log, (' ').join(cmd) + '\n')
             for line in iter(process.stdout.readline, ''.encode()):
                 # line = line.decode()
@@ -3306,9 +3353,13 @@ def run_generic_process(cmd, out_log = False, wait = True):
         raise
     except:
         print('run_generic_process: Unhandled Exception.')
-        kill_process(process)
-        com = process.communicate()
-        print(com[0] + '\n'.encode() + com[1])
+        out_log = realpath('run_generic_process_error.log')
+        write_to_log(out_log,  str(datetime.datetime.now()) + '\n')
+        write_to_log(out_log, (' ').join(cmd) + '\n')
+        if 'process' in locals():
+            kill_process(process)
+            com = process.communicate()
+            write_to_log(out_log, com[0].decode() + '\n' + com[1].decode())
         raise
 
 def run_processchunks(base_name, out_dir, machines, log = False):   
@@ -4526,7 +4577,11 @@ def plot_fsc(peet_dirs, out_dir, cutoff = 0.143, apix = False,
     axs.axhline(cutoff, color = 'grey', lw = 1, linestyle='dashed')
     axs.set(xlabel = 'Fraction of sampling frequency')
     res = []
-    get_area = 'cutoff'
+    
+    get_area = 'cutoff' 
+    #this is set to the cutoff of the first fsc
+    #the reasoning is that the cutoff is potentially unreliable
+    
     for x in range(len(peet_dirs)):
         with open(fshells[x], 'r') as f:
             ar_fshells = np.array(f.read().strip('\n\r').split(), dtype = float)
@@ -4580,7 +4635,7 @@ def plot_fsc(peet_dirs, out_dir, cutoff = 0.143, apix = False,
 
 def ncc(target, probe, max_dist, interp = 1, outfile = False,
         subpixel = 'full_spline', testnorm = False, no_norm = True,
-        permissive = True):
+        permissive = True, new_test_norm = False):
     """Outputs normalised cross-correlation map of two images.
     Input arguments:
         target/reference image [numpy array]
@@ -4595,27 +4650,43 @@ def ncc(target, probe, max_dist, interp = 1, outfile = False,
             'full_spline' converts to spline then accesses the central part
                             equivalent to 2*max_dist*interp
     Returns CC map [numpy array]
+    
+    
+    https://dsp.stackexchange.com/questions/31919/phase-correlation-vs-normalized-cross-correlation
     """
     if np.std(target) == 0 or np.std(probe) == 0:
         raise ValueError('ncc: Cannot normalise blank images')    
-    if max_dist > min(target.shape)//2 - 1:
-        max_dist = min(target.shape)//2 - 1
+    # if max_dist > min(target.shape)//2 - 1:
+    #     max_dist = min(target.shape)//2 - 1
 #    if interp > 1:
 #        target, probe = zoom(target, interp), zoom(probe, interp)
     #norm  
     target = (target - np.mean(target))/(np.std(target))
     probe = (probe - np.mean(probe))/(np.std(probe))
         
-    cc_fft = fftn(target) * np.conj(fftn(probe))
+    
     if testnorm:
+        cc_fft = fftn(target) * np.conj(fftn(probe))
         d1 = np.absolute(fftn(target))
         d2 = np.absolute(fftn(probe))
         d1[d1 == 0] = 1
         d2[d2 == 0] = 1
         ncc_fft = cc_fft/d1*d2 
     elif no_norm:
+        cc_fft = fftn(target) * np.conj(fftn(probe))
         ncc_fft = cc_fft
+    elif new_test_norm:
+        ft_target = fftn(target)
+        conj_target = np.conj(ft_target)
+        ft_probe = fftn(probe)
+        conj_probe = np.conj(ft_probe)
+        auto_t = np.absolute(ft_target*conj_target)
+        auto_p = np.absolute(ft_probe*conj_probe)
+        denom = np.sqrt(np.max(auto_t))*np.sqrt(np.max(auto_p))
+        cc_fft = ft_target * conj_probe
+        ncc_fft = cc_fft/denom
     else:
+        cc_fft = fftn(target) * np.conj(fftn(probe))
         fft_abs = np.absolute(cc_fft)
         fft_abs[fft_abs == 0] = 1 #avoid divison by zero
         ncc_fft = cc_fft/fft_abs
@@ -4742,7 +4813,8 @@ def p_extract_and_cc(
         no_ctf_convolution = False,
         no_cc_norm = True,
         padding = 5,
-        ignore_partial = True
+        ignore_partial = True,
+        sum_pcls = False
         ):
     """
     alis [str or list of str] query image file(s)
@@ -4925,6 +4997,7 @@ def p_extract_and_cc(
 #        chunk_base = 'flexo'
         
     #remove excludelist tilts and pcl coords
+    #this should be dealt with externally!!!
     if not isinstance(excludelist, bool):
         #excludelist is numbered from one, fix:
         excludelist = np.array(excludelist) - 1
@@ -4957,9 +5030,14 @@ def p_extract_and_cc(
         else:
             query = extract_2d_simplified(read_ali[file_ids[x]], 
                                                rsorted_pcls[:, x], box)
-        ref = extract_2d_simplified(read_plotback[file_ids[x]],
-                                                  rsorted_pcls[:, x], box)
+        if sum_pcls:
 
+            ref, offset = extract_2d_simplified(read_plotback[file_ids[x]],
+                                                  rsorted_pcls[:, x], box,
+                                                  offsets = True)
+        else:
+            ref = extract_2d_simplified(read_plotback[file_ids[x]],
+                                                  rsorted_pcls[:, x], box)
               
         #write out particle stacks
         if test_dir:
@@ -4987,6 +5065,12 @@ def p_extract_and_cc(
                 apix, V, Cs, wl, ampC, ps, 0, butter_order, dosesym,
                 orderL, pre_exposure, no_ctf_convolution = no_ctf_convolution,
                 padding = padding)
+        
+        if sum_pcls:
+            sum_n = 3
+            for y in range(len(query)):
+                query[y] = shift(query[y], offset[y])
+                ref[y] = shift(ref[y], offset[y])
         
         #write out filtered particle stacks
         if test_dir:
@@ -5291,7 +5375,7 @@ def cc_middle(pcl_n, ref, query, tilt_angles, ccmaps, interp, limit, map_size,
                limit, out_dir, debug, comp_out_name)
     return shifts, imp        
 
-class extracted_particles:
+class Extracted_particles:
     """
     
     """
@@ -5299,12 +5383,13 @@ class extracted_particles:
                  base_name = False,
                  chunk_base = False, n_peaks = 100, excludelist = [],
                  groups = False, tilt_angles = False, model_3d = False,
-                 apix = False):
+                 apix = False, **kwargs):
         """
         
         """
         self.sorted_pcls = sorted_pcls
         self.out_dir = out_dir
+        self.xcor_dir = kwargs.get('xcor_dir')
         self.base_name = base_name
         self.chunk_base = chunk_base
         self.n_peaks = n_peaks
@@ -5322,17 +5407,21 @@ class extracted_particles:
         
         self.flg_excludelist_removed = False  
         self.flg_outliers_removed = False
-        self.read_3d_model()        
+        
+        if not self.xcor_dir:
+            self.xcor_dir = join(self.out_dir, 'xcor_peaks')
+        
+        self.read_3d_model()     
+        self.update_indices()   
         self.remove_tilts_using_excludelist()
         self.remove_group_outliers()
-        self.update_indices()   
 
     
     def update_indices(self):
         if isinstance(self.groups, str):
             self.groups = np.load(self.groups)
         if isinstance(self.sorted_pcls, str):
-            self.sorted_pcls = np.load(self.sorted_pcls)        
+            self.sorted_pcls = np.load(self.sorted_pcls)     
         self.num_tilts = self.sorted_pcls.shape[0]
         self.tilt_indices = np.array(self.sorted_pcls[:, 0, 2], dtype = int)
         self.num_pcls = self.sorted_pcls.shape[1]
@@ -5347,7 +5436,7 @@ class extracted_particles:
         #this must be run exactly once
         if not self.flg_excludelist_removed:
             if not (isinstance(excludelist, bool)
-                    or isinstance(self.excludelist, bool)):
+                    or isinstance(self.excludelist, bool) or not excludelist):
                 tmp_excludelist = np.array(self.excludelist) - 1
                 exc_mask = np.isin(self.tilt_indices, tmp_excludelist,
                                    invert = True)  
@@ -5430,6 +5519,8 @@ class extracted_particles:
         self.shift_mask = np.zeros((self.num_tilts, self.num_pcls,
                                   self.n_peaks, 2), dtype = bool)
         
+        
+        
         if out_dir:
             self.out_dir = out_dir
         if chunk_base:
@@ -5438,7 +5529,7 @@ class extracted_particles:
         for x in range(self.num_pcls):
             if self.out_dir and self.chunk_base:
                 tmp_path = realpath(
-                        join(self.out_dir, 'cc_peaks', self.chunk_base
+                        join(self.xcor_dir, self.chunk_base
                              + '-%0*d_%s.npy' % (len(str(self.num_pcls)),
                                                  self.pcl_ids[x], name_ext)))
             elif isinstance(spec_path, tuple):
@@ -5451,6 +5542,7 @@ class extracted_particles:
             self.shift_mask[:, x] = np.repeat(tmp_arr[:, :, 3, None],
                                               2, axis = 2)
         self.shift_mask = np.array(self.shift_mask, dtype = bool)
+        
         
 #        #mask ccc <= 0
 #        self.cc_values = np.ma.masked_less_equal(self.cc_values, 0)
@@ -5471,15 +5563,16 @@ class extracted_particles:
             else:
                 c_tasks.append(tmp_task)
            
+            
         #c_tasks = [group_ordered[x:x + pcls_per_core]    
         #        for x in np.arange(self.num_pcls + 1, step = pcls_per_core)]
-        
+        #so these are particle indices and group IDs
         return c_tasks  
     
     def fit_cosine(self, init_scale = 1, init_const = 0, return_model = True):
         """Author: Daven Vasishtan
         """    
-        peak_median = np.median(self.cc_values[:, :, 0], axis = 1)        
+        peak_median = np.ma.median(self.cc_values[:, :, 0], axis = 1)        
         def f(p):
             model = p[0] * np.cos(np.radians(self.tilt_angles)) + p[1]
             return np.sum((peak_median - model)**2)
@@ -5499,7 +5592,6 @@ class extracted_particles:
                                         shift_std_cutoff = 3,
                                         subtract_global_shift = True,
                                         figsize = (12,12)):
-    
         def weighted_mean(vals, distances, exp = 2, axis = 0, stdev = False):
     
             #weights = 1/np.array(distances, dtype = float)**exp
@@ -5613,9 +5705,29 @@ class extracted_particles:
             """
     
             def euc_dist(a, b):
-                return np.sqrt((b[..., 0] - a[..., 0])**2
+                # m = np.absolute(np.min((np.min(a), np.min(b))))
+                # a = deepcopy(a) + m
+                # b = deepcopy(b) + m
+                mask = False
+                if isinstance(a, np.ma.core.MaskedArray):
+                    mask = a.mask[..., 0]
+                    a = deepcopy(a.data)
+                if isinstance(b, np.ma.core.MaskedArray):
+                    mask = b.mask[..., 0]
+                    b = deepcopy(b.data)
+                s =  np.sqrt((b[..., 0] - a[..., 0])**2
                                 + (b[..., 1]-a[..., 1])**2)
+                if not isinstance(mask, bool):
+                    s = np.ma.masked_array(s, mask = mask)
+                return s
+            
     
+            # print('saving shifts for debugging')
+            # np.save('shifts.npy', shifts[:, pcl_index, :n_peaks].data)
+            # np.save('wshifts.npy', wshifts[:, None])
+            # np.save('shifts_mask.npy', shifts[:, pcl_index, :n_peaks].mask)
+        
+            
             distance = euc_dist(shifts[:, pcl_index, :n_peaks],
                                 wshifts[:, None])
             cc_ratios = (cc_values[:, pcl_index, :n_peaks]  #!!!!!!!!!!!!!!!!!!!!! div 0?
@@ -5674,8 +5786,8 @@ class extracted_particles:
                       label = 'neighbour STD') #color = 'tab:blue', 
                 #max ccc shifts
                 ax[axis].scatter(xvals, self.shifts[:, pcl_index, 0, axis],
-                                  c = 'tab:purple', alpha = 0.6, 
-                                  label = 'max CCC shift')
+                                  c = 'tab:purple', alpha = 0.6, marker = '2',
+                                  label = 'max CCC shift', s = plt.rcParams['lines.markersize']**3)
                 ax[axis].plot(xvals, self.shifts[:, pcl_index, 0, axis],
                   c = 'tab:purple', alpha = 0.6)
                 #best scoring shift
@@ -5728,7 +5840,7 @@ class extracted_particles:
         self.shifts = np.ma.masked_array(self.shifts,
                                           mask = np.logical_not(self.shift_mask))
         self.cc_values = np.ma.masked_array(self.cc_values,
-                                          mask = np.logical_not(self.shift_mask[..., 0]))    
+                                          mask = np.logical_not(self.shift_mask[..., 0]))
         
         tree = KDTree(self.model_3d*[1, 1, z_bias])
         dst, pos = tree.query(self.model_3d*[1, 1, z_bias],
@@ -5746,18 +5858,15 @@ class extracted_particles:
               % (mn_nbrs, std_nbrs))
         
         #remove shifts that are +/- 3x std from median
-        self.nice_tilts(zero_tlt = 20)
-        warnings.warn('zero_tlt hardcoded 20')
+        self.nice_tilts(find_nearest(self.tilt_angles, 0))
         #nice_tilts will not work with non-normalised CC
-        glob_std = np.std(self.shifts[self.tilt_subset, :, 0], axis = (0,1))
-        glob_med = np.median(self.shifts[:, :, 0], axis = 1)
+        glob_std = np.ma.std(self.shifts[self.tilt_subset, :, 0], axis = (0,1))
+        glob_med = np.ma.median(self.shifts[:, :, 0], axis = 1)
         self.shifts = np.ma.masked_greater(self.shifts,
-                            glob_med[:, None, None]+glob_std*shift_std_cutoff)
+                        glob_med[:, None, None] + glob_std*shift_std_cutoff)
         self.shifts = np.ma.masked_less(self.shifts,
-                            glob_med[:, None, None]-glob_std*shift_std_cutoff)
-        
-    
-    
+                        glob_med[:, None, None] - glob_std*shift_std_cutoff)
+
         for pcl_index in range(self.num_pcls):
             
             if subtract_global_shift:
@@ -5768,7 +5877,7 @@ class extracted_particles:
                         pcl_index, dst, pos, n_peaks = n_peaks,
                         cc_weight_exp = cc_weight_exp, cc_weight = True)
                 tilt_mean = np.array((moving_average(cc_dst_mean[:, 0])[1],
-                                  moving_average(cc_dst_mean[:, 1])[1])).T       
+                                  moving_average(cc_dst_mean[:, 1])[1])).T    
                 pcl_mask = score_shifts(tmp_shifts, self.cc_values, tilt_mean,
                                     pcl_index,
                                     n_peaks = n_peaks,
@@ -5789,6 +5898,7 @@ class extracted_particles:
                                     return_mask = True)
             
             self.shift_mask[:, pcl_index, :n_peaks] = pcl_mask[..., None]
+            
     
             #this is the incorrect std to use here, but good enough for eyeballing
             if not isinstance(plot_pcl_n, bool):
@@ -5799,8 +5909,7 @@ class extracted_particles:
         
 
     
-    def write_fiducial_model(self, ali = False, poly = False, order = 3,
-                             smooth_ends = True):
+    def write_fiducial_model(self, ali = False):
 
         def compress_masked_array(vals, axis=-1, fill=1000):
             #https://stackoverflow.com/questions/46354509/transfer-unmasked-elements-from-maskedarray-into-regular-array
@@ -5818,10 +5927,11 @@ class extracted_particles:
             shifts[..., m] = compress_masked_array(shifts[..., m])
     
         shifts = shifts[:, :, 0]
-        shifted_pcls = np.ma.masked_array(deepcopy(self.sorted_pcls[:, :, :3]),
+        shifted_pcls = np.ma.masked_array(deepcopy(self.sorted_pcls[:, :, :3]), 
                                           mask = np.repeat(shifts.mask[..., 0, None], 3, axis = 2))
         
         shifted_pcls[:, :, :2] = (shifted_pcls[:, :, :2] - shifts)
+        
         outmod = PEETmodel() 
     
         for p in range(self.num_pcls):
@@ -5834,7 +5944,7 @@ class extracted_particles:
                     #np.all would skip tilt 0
                     outmod.add_point(0, p, shifted_pcls[r,p])
     
-        outmod_name = abspath(join(self.out_dir, 'flexo_ali.fid'))
+        outmod_name = abspath(join(self.out_dir, self.base_name + '.fid'))
         outmod.write_model(outmod_name)
     
         if ali:
@@ -5854,7 +5964,7 @@ class extracted_particles:
             self.tilt_subset = np.arange(bot, top)
         else:
             #pick tilts with the highest median CCCs
-            tilt_medians = np.median(self.cc_values[:, :, 0], axis = 1)
+            tilt_medians = np.ma.median(self.cc_values[:, :, 0], axis = 1)
             tilt_median_order = np.argsort(tilt_medians)[::-1]
             num_hi_tilts = int(np.max((min_size, self.num_tilts/4)))
             gappy = np.sort(tilt_median_order[:num_hi_tilts])
@@ -5889,7 +5999,7 @@ class extracted_particles:
 #            self.shift_magnitude = np.zeros(self.shifts.shape[:-1])
 #            
 #            for x in range(self.num_tilts):
-#                #this is wrong, I shouldn't be starting from 0,0...
+#                #this is wrong, I shouldn't be starting from 0,0..
 #                #maybe it's ok for initial estimation...
 #                if x == 0:
 #                    self.shift_magnitude[x] = np.linalg.norm(
@@ -5922,7 +6032,7 @@ class extracted_particles:
                 if x == 0:
                     pad_values = np.zeros((n_peaks, 2))
                     if isinstance(padding_shift, bool):
-                        pad_values += np.median(self.shifts[:, y, 0],
+                        pad_values += np.ma.median(self.shifts[:, y, 0],
                                                 axis = 0)
                     else:
                         pad_values += padding_shift
@@ -6001,9 +6111,9 @@ class extracted_particles:
             self.nice_tilts(zero_tlt = zero_tlt)
 
     #start with medians/std to select a trustworthy subset of particles
-        med_ccc = np.median(self.cc_values[self.tilt_subset, :, 0], axis = 0)
-        std_shift = (np.std(self.shifts[self.tilt_subset, :, 0, 0], axis = 0)
-                + np.std(self.shifts[self.tilt_subset, :, 0, 1], axis = 0))/2
+        med_ccc = np.ma.median(self.cc_values[self.tilt_subset, :, 0], axis = 0)
+        std_shift = (np.ma.std(self.shifts[self.tilt_subset, :, 0, 0], axis = 0)
+                + np.ma.std(self.shifts[self.tilt_subset, :, 0, 1], axis = 0))/2
         
         #this is needed for dispaly purposes
         if plot:
@@ -6462,7 +6572,7 @@ class extracted_particles:
         if out_dir and isinstance(out_dir, bool):
             out_dir = self.out_dir
         f, ax = plt.subplots(1, figsize = figsize)
-        peak_median = np.median(self.cc_values[:, :, 0], axis = 1)
+        peak_median = np.ma.median(self.cc_values[:, :, 0], axis = 1)
         q25, q75 = np.percentile(self.cc_values[:, : ,0], [25, 75], axis = 1)
         pmin = np.min(self.cc_values[:, :, 0], axis = 1)
         pmax = np.max(self.cc_values[:, :, 0], axis = 1)
@@ -6518,7 +6628,7 @@ class extracted_particles:
         if out_dir and isinstance(out_dir, bool):
             out_dir = self.out_dir
         f, ax = plt.subplots(1, figsize = figsize)
-        peak_median = np.median(self.cc_values[:, :, 0], axis = 0)
+        peak_median = np.ma.median(self.cc_values[:, :, 0], axis = 0)
         order = np.argsort(peak_median)[::-1]
         peak_median = peak_median[order]
         q25, q75 = np.percentile(self.cc_values[:, :, 0],[25, 75], axis = 0)

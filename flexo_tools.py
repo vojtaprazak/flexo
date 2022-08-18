@@ -5,14 +5,18 @@ Created on Thu Mar 17 09:48:06 2022
 @author: vojta
 """
 import os
+import sys
+import signal
+import datetime
 from copy import deepcopy
+from itertools import zip_longest
 from os.path import isfile, join, realpath, split, isdir
 import glob
 import numpy as np
 from sklearn.cluster import KMeans
 from scipy.spatial import KDTree
 import matplotlib.pyplot as plt
-from subprocess import check_output
+from subprocess import check_output, Popen, PIPE
 import mrcfile
 from PEETPRMParser import PEETPRMFile 
 from PEETModelParser import PEETmodel
@@ -22,25 +26,38 @@ import warnings
 from scipy import fftpack as fft
 from scipy.fftpack import fftn, ifftn, fftshift, ifftshift
 from numpy.fft import fftfreq
-from scipy.signal import butter, freqs
+from scipy.signal import butter, freqs, find_peaks
 from scipy.interpolate import interp1d
 from scipy.ndimage.interpolation import zoom, shift, rotate
 from scipy.ndimage import gaussian_filter
-from scipy.interpolate import interp1d, RectBivariateSpline
+from scipy.interpolate import RectBivariateSpline#,interp1d
 from scipy.signal import convolve2d
 from skimage.feature import peak_local_max
-from transformations import euler_from_matrix
+#from transformations import euler_from_matrix
 
-from definite_functions_for_flexo import run_generic_process, run_split_peet, ctf, get_resolution
-
-
-#from definite_functions_for_flexo import read_defocus_file
+import MapParser_f32_new
+from EMMap_noheadoverwrite import Map
+from skimage.filters import threshold_yen, threshold_isodata
+from scipy.ndimage.morphology import grey_dilation, grey_erosion
+from scipy.ndimage import convolve
+from IMOD_comfile import IMOD_comfile
 
 def norm(x):
     """normalise to 0 mean and 1 standard deviation"""
     return (x - np.mean(x))/np.std(x)
 
 def machines_from_imod_calib():
+    """
+    Get list of machines for paralelisation from IMOD_CALIB_DIR cpu.adoc.
+
+    Returns
+    -------
+    machines : list of str
+        list of machine names.
+    numbers : list of int
+        Number of available cores.
+
+    """
     adoc = join(os.environ['IMOD_CALIB_DIR'], 'cpu.adoc')
     if isfile(adoc):
         machines = []
@@ -76,10 +93,8 @@ def bin_model(input_model, output_model, binning, motl = False, out_motl = False
         Binning value. Values smaller than 0 scale up.
     motl : str, optional
         Motive list path. Used to transfer offsets.
-
-    Returns
-    -------
-    None.
+    out_motl : str, optional
+        Write motive list too.
 
     """
     m = np.array(PEETmodel(input_model).get_all_points())
@@ -180,10 +195,8 @@ def write_mrc(out_name, data, voxel_size = 1.0, origin = (0,0,0), mode = False,
         Output voxel (isotropic) size.
     origin : three ints or floats
         Output origin. The signs are inverted to keep header values the same as input.
-
-    Returns
-    -------
-    None.
+    mode : int, optional
+        Set MRC file mode. E.g. 1 is 16 bit int, 2 is 32 bit float.
 
     """
     with mrcfile.new(out_name, overwrite=True) as mrc:
@@ -355,8 +368,27 @@ def make_lamella_mask(surface_model, tomo_size = False, out_mask = False, plot =
         return mask
 
 def convert_ctffind_to_defocus(defocus_file, base_name, tlt, out_dir):
-    """I followed the instructons for ctfphaseflip where tilts are listed in 
-    reverse order."""
+    """
+    Converts to IMOD defocus 3.
+    Tilts are listed in reverse order (see IMOD ctfphaseflip)
+
+    Parameters
+    ----------
+    defocus_file : str
+        Path to file.
+    base_name : str
+        Output file base name (IMOD base name).
+    tlt : str
+        Path to tilt angle file (.tlt).
+    out_dir : str
+        Path to output directory.
+
+    Returns
+    -------
+    out_defocus_file : str
+        Path to converted defocus file.
+
+    """
     tilt_angles = [float(x.strip()) for x in open(tlt, 'r')]
     tilt_angles.reverse()
     defocus=[]
@@ -389,8 +421,28 @@ def convert_ctffind_to_defocus(defocus_file, base_name, tlt, out_dir):
 def read_defocus_file(defocus_file, base_name = False, tlt = False,
                       out_dir = False):
     """
-    reads deofocus file, converts to IMOD defocus 3 format.
-    Optional arguments required if input is CTFFind format.
+    Parsse defocus file.
+
+    Parameters
+    ----------
+    defocus_file : str
+        Path to .defocus file.
+    base_name : str, optional
+        Base name of output file. This entry is required only if the input 
+        file is in ctffind format. The default is False.
+    tlt : str, optional
+        Path to tilt file. This entry is required only if the input 
+        file is in ctffind format. The default is False.
+    out_dir : str, optional
+        Path to output directory. This entry is required only if the input 
+        file is in ctffind format. The default is False.
+
+    Returns
+    -------
+    df : ndarray
+        [number of tilts, 7]: [tilt ordinal, tilt ordinal, tilt angle, 
+                               tilt angle, defocus1 (nm), defocus2, astig angle]
+
     """
     #First check what type of defocus file it is.  
     #CTFFind is converted to .defocus 3.  
@@ -421,8 +473,8 @@ def read_defocus_file(defocus_file, base_name = False, tlt = False,
 
 def get_pcl_defoci(ssorted_pcls, defocus_file, ali, 
                    base_name = False, out_dir = False,
-                   apix = False, tlt = False,
-                   excludelist = False):
+                   apix = False, tlt = False
+                   ):
     """
     Calculate particle defoci based on tilt angles and measured defocus.
 
@@ -450,8 +502,6 @@ def get_pcl_defoci(ssorted_pcls, defocus_file, ali,
         Defocus in angstroms. Array shape is [num tilts, num particles]
 
     """
-
-    
     tilt_angles = ssorted_pcls[:, 0, 5]#assuming tilt angles were set in ssorted_pcles, I don't think it makes sense to deal with the alternative
     stack_apix, stack_size = get_apix_and_size(ali)
     if not apix:
@@ -543,7 +593,6 @@ def fid2ndarray(fiducial_model, tlt = False, defocus_file = False,
     #     elif np.all(ssorted_pcls[x, 0, 0] == ssorted_pcls[x, 0, 2]):
     #         excluded_views_mask[x] = False
     #         print('excluded same', x)
-            
             
     ssorted_pcls = ssorted_pcls[excluded_views_mask]
             
@@ -798,6 +847,20 @@ def check_refpath(path):
     return path
 
 def get_tiltrange(tiltlog):
+    """
+    Extract tilt range from tilt.com
+
+    Parameters
+    ----------
+    tiltlog : str
+        Path tot tilt.com.
+
+    Returns
+    -------
+    trange : list of 2 floats
+        Min and max tilt angles (or the inverse).
+
+    """
     with open(tiltlog) as f:
         aa = f.readlines()
     aline = False
@@ -866,9 +929,14 @@ def prepare_prm(prm, ite, tomo, tom_n, out_dir, base_name, new_prm_dir,
             default False
         refthr [int] number of particles to be included in the average
             default False
+        mod = [list of str] List of mode file paths. Overwrites prm model files.
+        motl = [list of str] List of motive list paths. Overwrites prm motl.
+        reuse_tiltrange = [bool] Use tilt range from prm file rather than 
+            extracting it from tilt.com
+        
     Returns:
-        [numpy.ndarray] frequency at cutoff, resolution at cutoff,
-                        FSC at nyquist
+        str, new prm path
+        float, apix
     """
     prmdir, prmname = os.path.split(prm)
     prm = PEETPRMFile(prm)
@@ -1060,7 +1128,70 @@ def prepare_prm(prm, ite, tomo, tom_n, out_dir, base_name, new_prm_dir,
     os.chdir(cwd)
     return new_prmpath, r_apix    
 
-def peet_halfmaps(peet_dir, prm1, prm2, machines):
+def get_fsc(vol1, vol2, out_dir, step=0.01):
+    """
+    Basic FSC.
+
+    Parameters
+    ----------
+    vol1 : str
+        Path to halfmap1.
+    vol2 : str
+        Path to halfmap1.
+    out_dir : str
+        Output directory.
+    step : float, optional
+        Step size. The default is 0.001.
+
+    """
+    if isinstance(vol1, str):
+        vol1 = mrcfile.open(vol1).data
+    if isinstance(vol2, str):
+        vol2 = mrcfile.open(vol2).data
+    
+    FTvol1 = fft.fftshift(fft.fftn(vol1))
+    FTvol2 = fft.fftshift(fft.fftn(vol2))
+    
+    cc = np.real(FTvol1*FTvol2.conj())/(np.abs(FTvol1)*np.abs(FTvol2))
+    x = fft.fftshift(fft.fftfreq(vol1.shape[2], 1))
+    y = fft.fftshift(fft.fftfreq(vol1.shape[1], 1))
+    z = fft.fftshift(fft.fftfreq(vol1.shape[0], 1))
+    xx, yy, zz = np.meshgrid(z, y, x, sparse = True, indexing = 'ij')
+    R = np.sqrt(xx**2+yy**2+zz**2)
+
+    # calculate the mean
+    f = lambda r : cc[(R >= r-step/2) & (R < r+step/2)].mean()
+    r  = np.linspace(0,x[-1], num=round((1/(2))//(step*2)))
+    mean = np.vectorize(f)(r) #I want this in the same format as calcUnbiasedFSC
+    
+    m = np.logical_and(np.logical_not(np.isnan(mean)), r > 0)
+    r = r[m]
+    mean = mean[m]
+    
+    with open(join(out_dir, 'arrFSCC.txt'), 'w') as g:
+        g.write(('\n').join(list(np.array(mean, dtype = str))))
+        
+    with open(join(out_dir, 'freqShells.txt'), 'w') as g:
+        g.write(('\n').join(list(np.array(r, dtype = str))))
+    
+   # return mean, r, R, FTvol1, FTvol2, cc
+
+def peet_halfmaps(peet_dir, prm1, prm2, machines, use_davens_fsc = True):
+    """
+    Run PEET with half datasets, 
+
+    Parameters
+    ----------
+    peet_dir : str
+        Path to peet directory, i.e. where halfmap directories will be.
+    prm1 : str
+        Path to half dataset prm 1.
+    prm2 : str
+        Path to half dataset prm 1.
+    machines : list
+        Machines for parallelisation, see run_split_peet.
+
+    """
     
     #fsc dirs - list, directories containing freShells or w/e
     
@@ -1085,14 +1216,25 @@ def peet_halfmaps(peet_dir, prm1, prm2, machines):
     run_split_peet(prm_base1, fsc1d, prm_base2, fsc2d, machines)
     #calcUnbiasedFSC
     os.chdir(peet_dir)
-    fsc_log = join(peet_dir, 'calcUnbiasedFSC.log')
-    print('Running calcUnbiasedFSC...')
-    run_generic_process(['calcUnbiasedFSC', prm1, prm2], out_log = fsc_log)
+    
+    
+    if use_davens_fsc:
+        vol1 = glob.glob(fsc1d + '/unMasked*.mrc')
+        vol1 = sorted(vol1, key=lambda x: int(x.split('_')[-1].split('.')[0].strip('Ref')))[-1]
+        vol2 = glob.glob(fsc2d + '/unMasked*.mrc')
+        vol2 = sorted(vol2, key=lambda x: int(x.split('_')[-1].split('.')[0].strip('Ref')))[-1]        
+        get_fsc(vol1, vol2, peet_dir)
+    else:
+        fsc_log = join(peet_dir, 'calcUnbiasedFSC.log')
+        print('Running calcUnbiasedFSC...')
+        run_generic_process(['calcUnbiasedFSC', prm1, prm2], out_log = fsc_log)
 
     os.chdir(cwd)
 
 def optimal_lowpass(y):
-    """Returns optimal 1/spatial frequency for a specified electron dose"""
+    """
+    Return 1/spatial frequency for a specified electron dose. 
+    """
     y = max(y, 7.03) #truncate negative values
     a = ((0.4*y - 2.81)/0.245)**(1./ - 1.665) #from grant and grigorieff
     a = round(1./a, 2)
@@ -1143,13 +1285,8 @@ def optimal_lowpass_list(order = False,
     Returns
     -------
     lowfreqs : list
-        list of optimal resolution for low pass filter.
+        list of 1/freqs.
 
-    """
-    """
-    Generate list of accummulated electron doses/tilt or the optimal
-    filtering frequencies.
-    zerotlt [int] numbered from 1
     """
     
     def read_orderfile(file, orderfile_type):
@@ -1248,7 +1385,7 @@ def dist_from_centre_map(box_size, apix):
     #author: Daven Vasishtan
     #while it may seem possible to do this with sqrt of meshgrid**2, the
     #latter produces an asymmetric array 
-    #importantly, the the difference in speed is negligible
+    #the the difference in speed is negligible
     #for a 1000,1000 image they are almost identical, the latter is faster
     #with smaller arrays
     init_dims = []
@@ -1261,13 +1398,24 @@ def dist_from_centre_map(box_size, apix):
             init_dims.append(f**2)
     return np.sqrt(init_dims[1][:,None] + init_dims[0])
 
+
+def ctf(wl, ampC, Cs, defocus, ps, f):
+    """ returns ctf curve
+    defocus in angstroms
+    Cs in mm"""
+    a = (-np.sqrt(1 - ampC**2)*np.sin(2*np.pi/wl*(defocus*(f*wl)**2/
+        2-Cs*(f*wl)**4/4) + ps) - ampC*np.cos(2*np.pi/wl*
+        (defocus*(f*wl)**2/2 - Cs*(f*wl)**4/4) + ps))
+    return a
+
 def ctf_convolve_andor_butter(inp, apix, V = 300000.0, Cs = 27000000.0,
                               ampC = 0.07, ps = 0,
                               lowpass = 0, defocus = 0, butter_order = 4,
                               no_ctf_convolution = False,
                               padding = 10, phaseflip = True):
 
-    """Convolute with CTF, phase flip and bandpass at the same time
+    """
+    Convolve with CTF, phase flip and bandpass at the same time
     (saves ffting back and forth)
     Intended for a single image
     Input:
@@ -1275,9 +1423,8 @@ def ctf_convolve_andor_butter(inp, apix, V = 300000.0, Cs = 27000000.0,
         apix [float] [angstrom]
         V [int] [volt]
         Cs [float] [angstrom]
-        wl [float] [angstrom]
-        defocus [int/float] [angstrom]
-        ps - lets not bother with that... 0
+        ampC [float] fraction of amplitude contrast
+        defocus [float] [angstrom]
         lowpass [float] [spatial freq]
         
     """
@@ -1311,6 +1458,7 @@ def ctf_convolve_andor_butter(inp, apix, V = 300000.0, Cs = 27000000.0,
     if padding:
         filtered = filtered[padding:-padding, padding:-padding]
     return filtered
+
 
 def ctf_convolve_andor_dosefilter_wrapper(ali, apix, V = 300000,
         Cs = 27000000, ampC = 0.07, ps = 0, defocus = 0, butter_order = 4, 
@@ -1360,7 +1508,8 @@ def ctf_convolve_andor_dosefilter_wrapper(ali, apix, V = 300000,
     lowfreqs : ndarray, optional
         List of 1/resolution values for filtering, one for each image. This will
         bypass determining lowfreqs from mdoc/tilt_dose etc.
-
+    phaseflip : bool
+    
     Returns
     -------
     ali : ndarray
@@ -1393,8 +1542,10 @@ def ctf_convolve_andor_dosefilter_wrapper(ali, apix, V = 300000,
     return ali
 
 def pad_pcl(pcl, box_size, sorted_pcl, stack_size):
-    """Pads 2D particle coordinates that are outside the 
-    stack coordinates with mean (of the particle)."""
+    """
+    Pads 2D particle coordinates that are outside the 
+    stack coordinates with mean (of the particle).
+    """
     if pcl.shape[1] != (box_size[0]):
         pad = np.abs(pcl.shape[1] - box_size[0])
         if 0 > sorted_pcl[0] - box_size[0]//2:
@@ -1415,14 +1566,14 @@ def pad_pcl(pcl, box_size, sorted_pcl, stack_size):
 
 def extract_2d(stack, sorted_pcls, box_size,
                           offsets = False, normalise_first = False):
-    """Simplified version of 2D particle extraction from a 2D stack.
+    """
+    Extract boxes from a 2D stack
     Input:
-        stack [str or numpy array] path of image stack or mrcfile array
-        sorted_pcls [2D numpy array] [tilt number: xcoord, ycoord, z]
-                    - coordinates of particles to be extracted
-        box_size [list of even natural numbers] e.g. [40,38]
+        stack [str or ndarray] path of image stack or mrcfile array
+        sorted_pcls [ndarray] see fid2ndarray
+        box_size [list ints] 
 
-    Returns extracted particles [numpy array [particle, tilt number, [X,Y]]]
+    Returns extracted particles  [particle, tilt number, [X,Y]]
         """
     def get_2d_offset(pcl):
         return pcl - round(pcl)
@@ -1497,32 +1648,46 @@ def extract_2d(stack, sorted_pcls, box_size,
         return all_pcls#, all_resid
     
 def ncc(target, probe, max_dist, interp = 1, outfile = False,
-        subpixel = 'full_spline', ccnorm = 'none',
-        permissive = True):
+        subpixel = 'full_spline', ccnorm = 'none'):
     """
-    ccnorm can be 
-    'none' - no normalisation
-    'phase_corr' - normalised phase correlation
-    'by_autocorr' - normalise by autocorrelations
-    
-    Outputs normalised cross-correlation map of two images.
-    Input arguments:
-        target/reference image [numpy array]
-        probe/query image [numpy array]
-        maximum distance to search [even integer]
-        interpolation [integer]
-        outfile: if intered, writes an MRC image of the map     
-        subpixel: 
+    Cross correlation map between two images. Same size.
+
+    Parameters
+    ----------
+    target : ndarray
+        reference image.
+    probe : ndarray
+        query.
+    max_dist : int
+        Search range, map is first cropped to 2x max_dist.
+    interp : int, optional
+        Interpolation for sub-pixel accuracy. The default is 1.
+    outfile : str, optional
+        Output pat file. The default is False.
+    subpixel : str, optional
+        Interpolation methods:
             'zoom': uses ndimage.interpolation.zoom to upscale the CC map
             'cropped_spline' first crops the CC map (to 2*max_dist*interp)
                             then converts to spline
             'full_spline' converts to spline then accesses the central part
                             equivalent to 2*max_dist*interp
-    Returns CC map [numpy array]
-    
-    
+            The default is 'full_spline'.
+    ccnorm : str, optional
+        Normalisation method. 
+            'none' - normalise by size
+            'phase_corr' - normalised phase correlation
+            'by_autocorr' - normalise by autocorrelations
+            The default is 'none'.
+
+    Returns
+    -------
+    ndarray
+        size is max_dist*2*interp
+
     https://dsp.stackexchange.com/questions/31919/phase-correlation-vs-normalized-cross-correlation
     """
+    
+    
     if np.std(target) == 0 or np.std(probe) == 0:
         raise ValueError('ncc: Cannot normalise blank images')    
     # if max_dist > min(target.shape)//2 - 1:
@@ -1567,15 +1732,6 @@ def ncc(target, probe, max_dist, interp = 1, outfile = False,
         
     if ccnorm != 'ncc':
         ncc = ifftshift(ifftn(ncc_fft).real)
-
-    
-#    #rectangular data should be handled correctly
-#    if ncc.shape[0] != ncc.shape[1]:
-#        overhang = (max(ncc.shape) - min(ncc.shape))/2
-#        if ncc.shape[0] < ncc.shape[1]:
-#            ncc = ncc[:, overhang:-overhang]
-#        else:
-#            ncc = ncc[overhang:-overhang]
     
     if subpixel == 'zoom':
         ncc = zoom(ncc, interp)
@@ -1741,8 +1897,145 @@ def combine_fsc_halves(prm1, prm2, tom_n, out_dir, ite,
     else:
         return [new_mods[0]], [new_motls[0]]
     
+    
+    
+    
+def get_resolution(fsc, fshells, cutoff, apix = False, fudge_ctf = True,
+                   get_area = 'cutoff'):
+    """
+    Get resolution value at cutoff. The correct approach is to get the lowest
+    resolution where FSC crosses the cutoff. But for estimating minor improvement
+    it's worth looking at bumps at higher resolution. (bumps due to CTF from
+    a single tomogram...)
+    
+    Inputs:
+        fsc [str, list or 1d array] str is interpreted as path to 'arrFSC.txt'
+            else list of FSC values
+        fshells [str, list or 1d array] str is interpreted as path to 
+            'freqShells.txt', else list of frequency values
+    Optional:
+        apix [float] pixel size. if specified, returns resolution value
+        fudge_ctf: disregard dips in ctf (potentially) due to CTF effects. I.e.
+            if FSC dips below [cutoff] but then goes up again above [cutoff],
+            ignore the previous dip(s).
+        get_area: [int, float or 'cutoff'] specify the number of resolution
+            bins used for calculating the area under FSC.  If 'cutoff', the
+            last bin is where FSC == cutoff.
+    Output:
+        [numpy array] (sampling frequency at cutoff, resolution,
+                        area under FSC, last bing for area calculation)
+    
+    """
+    if isinstance(fsc, str):
+        fsc = np.array(open(fsc).read().strip('\n\r').split(),
+                           dtype = float)
+    if isinstance(fshells, str):
+        fshells = np.array(open(fshells).read().strip('\n\r').split(),
+                           dtype = float)
+    if len(fsc) != len(fshells):
+        raise ValueError('get_resolution: input array length mismatch')
+    #I want to ignore trophs in FSC surrounded by very high FSC
+    #e.g. capsids with or without DNA
+    reliable_fsc = (1 - cutoff)/2 + cutoff
+    hi_pk = find_peaks(fsc, height = reliable_fsc)[0]
+    if hi_pk.size == 0:
+        hi_pk = np.where(fsc == np.max(fsc))[0]
+    #try to find low FSC "noise" peaks.  This is used to identify mask 
+    #correlation at higher frequencies
+    lo_pk = find_peaks(fsc, height = (-0.3, cutoff))[0]
+    if lo_pk.size == 0:
+        lo_pk = np.array([len(fsc)])
+    if not np.all(hi_pk > max(lo_pk)):
+        hi_pk = hi_pk[hi_pk < max(lo_pk)]
+    if not np.any(hi_pk):
+        hi_pk = np.array([0])
+    search_fsc = fsc[max(hi_pk): min(lo_pk) + 1]
+    search_shells = fshells[max(hi_pk): min(lo_pk) + 1]
+    #truncate search range to the first negative slope. +1 to include the first
+    #noise peak value.  This should make at least the last gradient value 
+    #positive. 
+    curr_grad = np.gradient(search_fsc)[:-1]
+    while curr_grad[-1] >= 0:
+        curr_grad = curr_grad[:-1]
+    search_fsc = search_fsc[:len(curr_grad)]
+    search_shells = search_shells[:len(curr_grad)]
+    
+    if not fudge_ctf:
+        #truncate search range to where it stops being > cutoff, + 1
+        search_end = np.where((search_fsc > cutoff) == False)[0][0] + 1
+        search_fsc = search_fsc[:search_end]
+        search_shells = search_shells[:search_end]
+ 
+    #only check negative slope
+    #I think this is redundant if fudge_ctf == False but shouldn't hurt
+    grad_mask = np.gradient(search_fsc) <= 0
+    search_fsc = search_fsc[grad_mask]
+    search_shells = search_shells[grad_mask]
+    
+    res = find_nearest(search_fsc, cutoff)
+    #    if len(res) > 1:
+#        #this was meant to do the same as only taking negative slope
+#        #but still useful?
+#        res = res[0]
+    if res.size > 1:
+        raise ValueError('get_res: multiple values where fsc == cutoff. %s'
+                         % res)
+    if res >= len(search_fsc) - 2:
+        print(('get_resolution: WARNING: detected resolution too close to ' +
+            'resolution at Nyquist.  Consider using smaller pixel size.'))
+        
+    #area under curve
+    if get_area == 'cutoff':
+        cutoff_idx = int(np.where(fsc == search_fsc[res])[0] + 1)
+    elif isinstance(get_area, int) or isinstance(get_area, float):
+        cutoff_idx = get_area
+    area = np.trapz(fsc[:cutoff_idx])
+    
+    i = interp1d(search_shells, search_fsc)
+    new_fshells = np.linspace(search_shells[0], search_shells[-1],
+                              len(search_shells)*10)
+    new_fsc = i(new_fshells)
+    res = new_fshells[find_nearest(new_fsc, 0.143)]
+    
+#    res = search_fsc[res]
+#    #need to get the fsc value here to be able to find its index in the 
+#    #whole FSC list not just search_fsc
+#    res = np.where(fsc == res)[0]
+    #res: (sampling frequency, resolution, area under FSC, last bing for area)
+    res = np.array((res, 0, area, cutoff_idx), dtype = float)    
+    res = np.round(res, decimals = 3)
+    if apix:
+        res[1] = np.round(apix/res[0], decimals = 1)
+    return res
+    
 def plot_fsc(peet_dirs, out_dir, cutoff = 0.143, apix = False,
              fshells = False, fsc = False, simpleFSC = False):  
+    """
+    Expecting output from PEET calcUnbiasedFSC or simpleFSC
+
+    Parameters
+    ----------
+    peet_dirs : list
+        List of directories containing FSC files..
+    out_dir : str
+        Where to write the plot.
+    cutoff : float, optional
+        Cutoff. The default is 0.143.
+    apix : float, optional
+        Pixel size. The default is False.
+    fshells : list, optional
+        Specify freqShells.txt directly. The default is False.
+    fsc : list, optional
+        Specify arrFSCC.txt directly. The default is False.
+    simpleFSC : bool, optional
+        Look for simpleFSC output instead of calcUnbiasedFSC. The default is False.
+
+    Returns
+    -------
+    float
+        Resolution or area under FSC.
+
+    """
     apix = float(apix)
     
     fig, axs = plt.subplots(1, 1, figsize = (7, 7))
@@ -1997,3 +2290,947 @@ def tomo_fourier_mask(ang, tomo_size, out_mask = False, thick = 4, sigma = 2, z_
     
     return mask
 
+
+def replace_pcles(average_map, tomo_size, csv_file, mod_file, outfile, apix,
+                  rotx = True):
+
+    #remove inputs: group_mask = False, extra_bin = False, average_volume_binning = 1
+    """
+    Plotback particles using IMOD model and motive list. average_map voxel
+    size does not necessarily need to match the tomogram pizel size.
+    
+    Expecting IMOD model in rotated orientation (not _full.rec)
+
+    Parameters
+    ----------
+    average_map : str or MapParser
+        Density map of reference particle. White on black, segmented.
+    tomo_size : list of three ints
+        XYZ tomogram size.
+    csv_file : str or PEETMotiveList
+        PEET motive list.
+    mod_file : str or PEETmodel
+        PEET model file.
+    outfile : str
+        Path to output file.
+    apix : float
+        Voxel size (isotropic only) of tomogram.
+    rotx : bool, optional
+        If True, write in rotated orientation (90 degrees around X axis).
+        If False, write in _full.rec orientation (default initial tilt output).
+        The input model should be in the corresponding orientation.
+        The default is False.
+
+    """ 
+    
+    if isinstance(average_map, str):
+        ave = MapParser_f32_new.MapParser.readMRC(average_map)
+    else:
+        ave = average_map #intended for parallelisation
+    
+    average_apix = ave.apix
+    average_volume_binning = np.round(average_apix/apix, decimals = 3)
+    if average_volume_binning > 1:
+        warnings.warn('Average volume binning is %s, meaning that a larger pixel size map is being placed in a lower pixel size volume. This is suspicious.' % average_volume_binning)
+    xsize = ave.x_size()
+    ysize = ave.y_size()
+    zsize = ave.z_size()  
+    
+    if average_volume_binning != 1:
+        xsize = xsize * average_volume_binning
+        ysize = ysize * average_volume_binning
+        zsize = zsize * average_volume_binning
+    
+    if type(csv_file) == str:
+        motl = PEETMotiveList(csv_file)
+    elif isinstance(csv_file, PEETMotiveList):
+        motl = csv_file
+        
+    if type(mod_file) == str:
+        mod = PEETmodel(mod_file).get_all_points()
+    elif isinstance(mod_file, PEETmodel):
+        mod = mod_file       
+        
+    mat_list = motl.angles_to_rot_matrix()
+    
+    offsets = motl.get_all_offsets()
+    if np.max(offsets) != 0.:
+        warnings.warn('Motive list contains non-zero offsets. These WILL NOT be added to particle positions.')
+    offsets *= 0
+    
+    border = int(xsize//2)
+    tomo_size = np.array(tomo_size, dtype = int) + int(border*2)
+    mod += border
+    tomo = Map(np.zeros(np.flip(tomo_size, 0), dtype='float32'),[0,0,0],
+               apix,'replace_pcles') #replaced ave.apix
+
+    if mod.max() > np.array(tomo_size).max():
+        print('Maximum model coordinates exceed volume size. %s %s'\
+        % (mod.max(),  np.array(tomo_size).max()))
+    if mod.ndim == 1:
+        mod = mod[None]
+
+    for p in range(len(mod)):
+        x_pos = int(round(offsets[p][0] + mod[p][0]))
+        y_pos = int(round(offsets[p][1] + mod[p][1]))
+        z_pos = int(round(offsets[p][2] + mod[p][2]))
+
+        x_offset = offsets[p][0] + mod[p][0] - x_pos
+        y_offset = offsets[p][1] + mod[p][1] - y_pos
+        z_offset = offsets[p][2] + mod[p][2] - z_pos     
+        
+        new_ave = ave.copy()
+        shifted_ave = new_ave.rotate_by_matrix(mat_list[p], ave.centre(), cval = 0)
+        
+        if average_volume_binning == 1:  
+            shifted_ave.fullMap = shift(shifted_ave.fullMap, 
+                                        (z_offset, y_offset, x_offset))
+        else:     
+            z_offset /= average_volume_binning
+            y_offset /= average_volume_binning
+            x_offset /= average_volume_binning
+            shifted_ave.fullMap = shift(shifted_ave.fullMap, 
+                                        (z_offset, y_offset, x_offset))  
+            shifted_ave.fullMap = zoom(shifted_ave.fullMap,
+                                       average_volume_binning)  
+
+        x_d = xsize % 2
+        y_d = ysize % 2
+        z_d = zsize % 2
+        
+        # x_p_min = np.math.floor(max(0, x_pos - xsize / 2))
+        # x_p_max = np.math.ceil(min(tomo_size[0], x_d + x_pos + xsize / 2))
+        # y_p_min = np.math.floor(max(0, y_pos - ysize / 2))
+        # y_p_max = np.math.ceil(min(tomo_size[1], y_d + y_pos + ysize / 2))
+        # z_p_min = np.math.floor(max(0, z_pos - zsize / 2))
+        # z_p_max = np.math.ceil(min(tomo_size[2], z_d + z_pos + zsize / 2))
+
+        x_p_min = np.math.ceil(max(0, x_pos - xsize / 2))
+        x_p_max = np.math.floor(min(tomo_size[0], x_d + x_pos + xsize / 2))
+        y_p_min = np.math.ceil(max(0, y_pos - ysize / 2))
+        y_p_max = np.math.floor(min(tomo_size[1], y_d + y_pos + ysize / 2))
+        z_p_min = np.math.ceil(max(0, z_pos - zsize / 2))
+        z_p_max = np.math.floor(min(tomo_size[2], z_d + z_pos + zsize / 2))
+        
+        x_n_min, y_n_min, z_n_min = 0, 0, 0
+        x_n_max, y_n_max, z_n_max = (xsize, ysize, zsize)
+        
+        if x_p_min == 0:
+            x_n_min = np.math.floor(xsize / 2 - x_pos)
+        if y_p_min == 0:
+            y_n_min = np.math.floor(ysize / 2 - y_pos)
+        if z_p_min == 0:
+            z_n_min = np.math.floor(zsize / 2 - z_pos)
+
+        if x_p_max == tomo_size[0]:
+            x_n_max = np.math.ceil(tomo_size[0] - (x_pos - xsize / 2))
+        if y_p_max == tomo_size[1]:
+            y_n_max = np.math.ceil(tomo_size[1] - (y_pos - ysize / 2))
+        if z_p_max == tomo_size[2]:
+            z_n_max = np.math.ceil(tomo_size[2] - (z_pos - zsize / 2))
+
+        x_p_min = int(x_p_min)
+        x_p_max = int(x_p_max)
+        y_p_min = int(y_p_min)
+        y_p_max = int(y_p_max)
+        z_p_min = int(z_p_min)
+        z_p_max = int(z_p_max)
+        
+        x_n_min = int(x_n_min)
+        x_n_max = int(x_n_max)
+        y_n_min = int(y_n_min)
+        y_n_max = int(y_n_max)
+        z_n_min = int(z_n_min)
+        z_n_max = int(z_n_max)
+
+        try:
+            #27 
+            tomo.fullMap[z_p_min:z_p_max, y_p_min:y_p_max, x_p_min:x_p_max]\
+        += shifted_ave.fullMap[z_n_min:z_n_max, y_n_min:y_n_max, x_n_min:x_n_max]
+        except:
+            raise ValueError('Particle model coordinates are outside specified region bounds.  Please make sure input 3D model fits the input tomogram.')
+    tomo.fullMap = tomo.fullMap[border:-border, border:-border, border:-border]
+    if not rotx:
+        tomo.fullMap = np.rot90(-tomo.fullMap, k = -1)
+    else:
+        tomo.fullMap = -tomo.fullMap
+    if outfile:
+        print('Writing MRC file %s' % (outfile))
+    
+        write_mrc(outfile, tomo.fullMap)
+        
+def reproject_volume(output_file, tomo = False, ali = False, tlt = False,
+                     thickness = False, add_tilt_params = [], tiltcom = False,
+                     excludelist = []):
+    """
+    Reproject a volume into tilt series. Expecting volume in "full" orientation.
+    This funciton operates two modes: 
+    If tiltcom is specified (IMOD_comfile),
+    it will use it's attributes and ignore other optional arguments apart from 
+    tomo (volume to reproject).
+    Otherwise, it requires tomo, ali, tlt and thickness.'
+
+    Parameters
+    ----------
+    output_file : str
+        Path to output file.
+    tomo : str, optional
+        Path to input (_full.rec) tomogram. The default is False.
+    ali : str, optional
+        Path to aligned tilt series. The default is False.
+    tlt : str, optional
+        Path to tilt angle file (.tlt). The default is False.
+    thickness : int, optional
+        Tomogram thickness. The default is False.
+    add_tilt_params : list of str, optional
+        Optional argumetns to pass to IMOD tilt. The default is [].
+    tiltcom : IMOD_comfile, optional
+        IMOD_comfile instance with tilt.com parameters. The default is False.
+    excludelist : list if int, optional
+        List of views to exclude, numbered from 1. The default is [].
+    write_comfile : bool, optional
+        If true and IMOD_comfile is specified, write command file. The default is False.
+
+
+    Returns
+    -------
+    None.
+
+    """
+    #operates in 2 modes: with and without tiltcom. tiltcom overrides optional inputs
+        
+    if not tiltcom and (not ali or not tlt or not tomo):
+        raise Exception('Either tiltcom (IMOD_comfile with tilt.com parameters),' +
+                        ' or tomogram, aligned stack and tilt file is required.')
+
+    if tiltcom:
+        if isinstance(tiltcom, str):
+            tiltcom = IMOD_comfile(split(tiltcom)[0], split(tiltcom)[1])
+        exclude_key = ['OutputFile']
+        add_tilt_params = tiltcom.get_command_list(
+            append_to_exclude_keys = exclude_key)[1:] #exclude 'tilt'
+        if not tomo:
+            tomo = tiltcom.dict['OutputFile']
+        tlt = tiltcom.dict['TILTFILE']
+        excludelist = tiltcom.excludelist
+
+    str_tilt_angles = [str(x.strip('\n\r').strip(' ')) for x in open(tlt)]
+    str_tilt_angles = [str_tilt_angles[x] for x in range(len(str_tilt_angles))
+                       if x + 1 not in excludelist] #numbered from 1
+
+    # if write_comfile and tiltcom:
+    #     tiltcom.dict['RecFileToReproject'] = tiltcom.dict['OutputFile']
+    #     tiltcom.separator_dict['RecFileToReproject'] = None
+    #     tiltcom.dict['REPROJECT'] = [float(x) for x in str_tilt_angles]
+    #     tiltcom.separator_dict['REPROJECT'] = ','
+    #     tiltcom.dict['OutputFile'] = output_file
+    #     out_dir = os.path.split(output_file)[0]
+    #     if not out_dir:
+    #         out_dir = os.getcwd()
+    
+    cmd_list = ['tilt',
+                '-REPROJECT', (',').join(str_tilt_angles),
+                '-RecFileToReproject', tomo,
+                '-OutputFile', output_file
+                ]    
+    if not tiltcom:
+        cmd_list.extend(['-InputProjections', ali,
+                         '-TILTFILE', tlt,
+                         '-THICKNESS', thickness])
+
+    cmd_list.extend(add_tilt_params)
+    #check_output((' ').join(cmd_list), shell = True)
+    run_generic_process(cmd_list)
+    
+    
+def mask_from_plotback(volume, out_mask, size = 5,
+                           lamella_mask_path = False,
+                           mean_filter = True,
+                           invert = False):
+    """
+    Thresholds a plotback and generates a smooth mask.
+
+    Parameters
+    ----------
+    volume : str
+        Path to plotback.
+    out_mask : str
+        Path to output file.
+    size : int, optional
+        Dilation size. Negative values erode. The default is 5.
+    lamella_mask_path : str, optional
+        Path to lamella mask, which will be multiplied with the output mask.
+        The default is False.
+
+    Returns
+    -------
+    None.
+
+    """
+
+    if type(volume) == str:
+        m = deepcopy(mrcfile.open(volume).data)
+    else:
+        m = volume
+    
+    #threshold in a sensible? way.  
+    #First flatten volume into an image to get thr
+    shortest_axis = np.where(np.array(m.shape) == min(m.shape))[0][0]
+    thr = threshold_yen(np.mean(m, axis = shortest_axis))
+    m = m < thr
+
+    if size < 0:
+        size = -size
+        m = grey_erosion(m, size)
+    else:
+        m = grey_dilation(m, size)
+    if invert:
+        m = np.logical_not(m)
+    write_mrc(out_mask, m)
+
+    tmp_mask = out_mask + '~'
+    #smooth edges
+    os.rename(out_mask, tmp_mask)
+    if not mean_filter:
+        check_output('mtffilter -3 -l 0.001,0.03 %s %s' %
+                     (tmp_mask, out_mask), shell = True)   
+    else:
+        check_output('clip smooth -n -3 -l 7 %s %s' % (tmp_mask, out_mask), shell = True)
+        warnings.warn('3d mask smooting is hardcoded')
+    os.remove(tmp_mask)
+    os.rename(out_mask, tmp_mask)
+    check_output('newstack -scale 0,1 %s %s' % (tmp_mask, out_mask), shell = True)
+    os.remove(tmp_mask)
+
+    if lamella_mask_path:
+        os.rename(out_mask, tmp_mask)
+        check_output('clip multiply %s %s %s' % (tmp_mask,
+                    lamella_mask_path, out_mask), shell = True)   
+        
+def get2d_mask_from_plotback(ts, out_2dmask, dilation = 10):
+    """
+    Generate a soft-edge mask from reprojected plotback using threshold_yen.
+
+    Parameters
+    ----------
+    ts : str
+        Path to reprojected plotback.
+    out_2dmask : str
+        Path to output mask.
+    dilation : TYPE, optional
+        Size of border around thresholded object. The default is 10.
+
+    Returns
+    -------
+    None.
+
+    """
+    
+    mf = int(np.ceil(dilation*0.5))
+    
+    m = deepcopy(mrcfile.open(ts).data)
+    for t in range(len(m)):
+        thr = threshold_isodata(m[t])
+        m[t] = m[t] < thr
+        m[t] = grey_dilation(m[t], dilation)
+        m[t] = convolve(m[t], np.ones((mf,mf)))
+        
+    m = m/mf**2 # scale to max 1
+        
+    write_mrc(out_2dmask, m)
+    
+def corrsearch(refpath, querypath, out_dir, trim = [10, 10, 10],
+                  outname = 'out_corrsearch3d.txt',
+                  plot = True,
+                  figsize = (12,5),
+                  iter_n = False, rotx = False):
+    """
+    Wrapper for corrsearch3d
+    
+    refpath [str]
+    querypath [str]
+    out_dir [str]
+    trim [list of 3 ints] trim edges around X,Y,Z
+    num_patches [list of 3 ints] number of patches in X,Y,Z
+    outname [str] name of corrsearch3d txt file
+    rotx [bool] has the tomogram been rotated around X (clip rotx)
+    """
+    
+    out_file = join(realpath(out_dir), outname)
+    _, tomo_size = get_apix_and_size(refpath)
+    
+    for x in range(len(trim)):
+        trim[x] = min(trim[x], tomo_size[x]//10)
+
+    num_patches = np.array(np.round(tomo_size/np.min(tomo_size))*3, dtype = int)
+    
+    patch_s = int(np.min(tomo_size)/2.5)
+    cmd = ['corrsearch3d',
+           '-ref', refpath, #ref
+           '-align', querypath, #query
+           '-o', out_file, #transform txt file
+           '-size', '%s,%s,%s' % (patch_s, patch_s, patch_s), #size of patches
+           '-number', '%s,%s,%s' % (num_patches[0], num_patches[1], num_patches[2]),#number of patches
+           '-x', '%s,%s' % (trim[0], tomo_size[0] - trim[0]),
+           '-y', '%s,%s' % (trim[1], tomo_size[1] - trim[1]),
+           '-z', '%s,%s' % (trim[2], tomo_size[2] - trim[2]),
+           '-l', '0.3,0.05'
+          ]
+    run_generic_process(cmd)
+    
+    disp = []
+    with open(out_file) as f:
+        for x in f.readlines():
+            disp.append(x.split())
+    disp = np.array(disp[1:], dtype = float)
+    if not rotx:
+        #change to xyz coords, dxdydz, ccc
+        disp = disp[:, [0,2,1,3,5,4,6]]
+        tomo_size = tomo_size[[0, 2, 1]]
+    
+    
+    #get rid of 10% of worst CCC
+    min_cc = np.percentile(disp[:,-1], 10)
+    if plot:
+        rejected = disp[disp[:, -1] <= min_cc]
+    disp = disp[disp[:, -1] > min_cc]
+
+    fit, _ = fit_pts_to_plane(disp[:, [0, 1, 5]])
+    #X1, Y1, Z1 = def_plane(fit, (np.max(disp[:, [0, 1, 5]], axis = 0)))
+    rX, rY = np.rad2deg(np.arctan(fit[:2]))
+    OFFSET, global_xtilt = np.rad2deg(np.arctan(fit[:2]))[:, 0]
+    
+    SHIFT = np.median(disp[:, [3, 5]], axis = 0)
+    
+    
+    if plot:
+        def line_in_plane(X, Y, fit):
+            return X*fit[0] + Y*fit[1] + fit[2]
+        lx = line_in_plane(np.arange(tomo_size[0]), int(tomo_size[1]/2), fit)
+        ly = line_in_plane(int(tomo_size[0]/2), np.arange(tomo_size[1]),fit)
+                          
+        f, ax = plt.subplots(1,2, figsize = figsize)
+        f.suptitle('Relative tomogram rotation')
+        ax[0].scatter(disp[:, 0], disp[:, 5], alpha = 0.3, label = 'dZ shift')
+        ax[0].scatter(rejected[:, 0], rejected[:, 5], alpha = 0.3,
+                      label = 'rejected', c = 'r')
+        ax[0].plot(lx, linewidth = 3, label = 'best fit')
+        ax[0].title.set_text('Tilt around Y axis, %.02f deg' % OFFSET)
+        ax[0].set(xlabel = 'X coordinate [pixels]', ylabel = 'dZ [pixels]')
+        
+        ax[1].scatter(disp[:, 1], disp[:, 5], alpha = 0.3, label = 'dZ shift')
+        ax[1].scatter(rejected[:, 1], rejected[:, 5], alpha = 0.3,
+                      label = 'rejected', c = 'r')
+        ax[1].plot(ly, linewidth = 3, label = 'best fit')
+        ax[1].title.set_text('Tilt around X axis, %.02f deg' % global_xtilt)
+        ax[1].set(xlabel = 'Y coordinate [pixels]', ylabel = 'dZ [pixels]')
+
+        ax[1].legend()
+        if iter_n:
+            plot_name = 'tomo_rotation%02d.png' % iter_n
+        else:
+            plot_name = 'tomo_rotation.png'
+        plt.savefig(join(realpath(out_dir), plot_name))
+        plt.close()
+    return SHIFT, -OFFSET, -global_xtilt
+        
+
+def match_tomos(ref_tiltcom, query_tiltcom, out_dir,
+                niters = 3, angrange = 20, plot = True):
+    """
+    Searches for relative orientations of two tomograms with slightly different
+    orientations. Inputs are two tilt comfiles in the same directory, the
+    comfiles and output tomograms should have different names. The outputs
+    can then be fed to align.com
+
+    Parameters
+    ----------
+    ref_tiltcom : str
+        Name of "reference" tilt comfile.
+    query_tiltcom : str
+        Name of tilt comfile to be aligned.
+    out_dir : TYPE
+        DESCRIPTION.
+    niters : TYPE, optional
+        DESCRIPTION. The default is 3.
+    angrange : TYPE, optional
+        DESCRIPTION. The default is 20.
+    plot : TYPE, optional
+        DESCRIPTION. The default is True.
+
+    Returns
+    -------
+    SHIFT : TYPE
+        DESCRIPTION.
+    OFFSET : TYPE
+        DESCRIPTION.
+    global_xtilt : TYPE
+        DESCRIPTION.
+
+    """
+    
+    #two comfiles
+    
+    """
+    returns translation and rotation between two tomograms:
+        1) extracts parameters from rec_dir and out_dir comfiles
+        2) makes (binned) versions
+        3) checks rotation and translation by comparing strips of each tomo
+             or use 3D  cc (corrsearch3d), use_corr = True
+    How tiny: additional binning relative to input tomo
+    works fine at bin 16 (60 apix), accurate to ~3 unbinned pixels and 0.2 degrees
+    copy_orig [str] path to correctly binned ref tomo for matching
+        if not False, skips reference tomo generation
+    """
+
+    #angrange = 20 #+/- 10 degrees
+
+    imodscript(ref_tiltcom, out_dir)  
+
+    imodscript(query_tiltcom, out_dir)  
+
+    rtiltcom = IMOD_comfile(out_dir, ref_tiltcom)
+    qtiltcom = IMOD_comfile(out_dir, query_tiltcom)
+    
+    if 'SHIFT' not in qtiltcom.dict.keys():
+        qtiltcom.dict['SHIFT'] = [0.0, 0.0]
+        qtiltcom.separator_dict['SHIFT'] = ' '
+    if 'OFFSET' not in qtiltcom.dict.keys():
+        qtiltcom.dict['OFFSET'] = 0.0
+        qtiltcom.separator_dict['OFFSET'] = None
+    if 'XAXISTILT' not in qtiltcom.dict.keys():
+        qtiltcom.dict['XAXISTILT'] = 0.0
+        qtiltcom.separator_dict['SHIFT'] = None     
+    
+    for i in range(1, niters + 1):
+        nSHIFT, nOFFSET, nglobal_xtilt = corrsearch(rtiltcom.dict['OutputFile'],
+                                                 qtiltcom.dict['OutputFile'], out_dir,
+                                                 iter_n = i,
+                                                 plot = plot)
+            
+        SHIFT = np.round(np.array(qtiltcom.dict['SHIFT'])
+                         - nSHIFT*qtiltcom.dict['IMAGEBINNED'], decimals = 2)
+        OFFSET = np.round((qtiltcom.dict['OFFSET'] - nOFFSET), decimals = 2)
+        global_xtilt = np.round((qtiltcom.dict['XAXISTILT'] - nglobal_xtilt), decimals = 2)
+        # print('iter_n %s' % i)
+        # print('corrsearch calc SHIFT, OFFSET, global_xtilt %s,%s,%s'
+        #       % (nSHIFT, nOFFSET, nglobal_xtilt*qtiltcom.dict['IMAGEBINNED']))
+        # print('corrsearch curr SHIFT, OFFSET, global_xtilt %s,%s,%s'
+        #       % (SHIFT, OFFSET, global_xtilt))
+        
+        new_qtiltcom = deepcopy(qtiltcom)
+        new_qtiltcom.dict['OFFSET'] = OFFSET
+        new_qtiltcom.dict['SHIFT'] = SHIFT
+        new_qtiltcom.dict['XAXISTILT'] = global_xtilt
+        new_qtiltcom.write_comfile(out_dir)
+
+        if i != niters:
+            imodscript(query_tiltcom, out_dir) 
+
+    return SHIFT, OFFSET, global_xtilt        
+
+def tomo_subtraction(tilt_comfile, out_dir, mask = False, plotback3d = False, ali = False,
+                     iterations = 1, supersample = True, dilation_size = 0,
+                     fakesirt = 20
+                     ):
+
+    def update_comdict(orig_dict, mod_dict):
+        for key in mod_dict.keys():
+            orig_dict[key] = mod_dict[key]
+        return orig_dict    
+    
+    def subtract_mean_density(tomo):
+        mean = float(check_output('header -mean %s' % tomo, shell = True).split()[0])
+        #mean = float(out[0])
+        mean = -mean
+        tmp = tomo + '~'
+        if isfile(tmp):
+            os.remove(tmp)
+        check_output('newstack -multadd 1,%s %s %s' % (mean, tomo, tmp), shell = True)
+        os.rename(tmp, tomo)
+        
+    if not isdir(out_dir):
+        os.makedirs(out_dir)
+    
+    if isinstance(tilt_comfile, IMOD_comfile):
+        tiltcom = tilt_comfile
+    else:
+        tiltcom = IMOD_comfile(split(tilt_comfile)[0], 'tilt.com')
+        
+    
+    if not mask:
+        if plotback3d:
+            mask = join(out_dir, 'mask.mrc')
+            mask_from_plotback(plotback3d, mask, size = dilation_size, invert = True)
+        else:
+            raise Exception('mask or 3d plotback for mask generation required')
+    
+    if not ali:
+        ali = tiltcom.dict['InputProjections']
+    
+    #ali_mode = int(check_output('header -mode %s' % (ali), shell = True).split()[0])
+    out_tiltcom = deepcopy(tiltcom)
+    for ite in range(iterations + 1):
+        
+        out_tom = join(out_dir, 'tomo%02d.mrc' % ite)
+        prev_iter_tom = join(out_dir, 'tomo%02d.mrc' % (ite - 1))
+        rep_tom = join(out_dir, 'rep%02d.mrc' % ite)
+        sub_ts = join(out_dir, 'ts%02d.mrc' % ite)
+        prev_iter_ts = join(out_dir, 'ts%02d.mrc' % (ite - 1))
+        
+        a_dict = {'OutputFile': out_tom,
+              'InputProjections': sub_ts
+                  }
+            
+        if ite != 0:
+            subtract_mean_density(prev_iter_tom)
+            tmp = prev_iter_tom + '~'
+            if isfile(tmp):
+                os.remove(tmp)
+            check_output('clip multiply %s %s %s' % (prev_iter_tom, mask, tmp), shell = True)
+            os.rename(tmp, prev_iter_tom)
+            
+            reproject_volume(rep_tom, tomo = prev_iter_tom, tiltcom = out_tiltcom)
+
+            check_output('clip subtract %s %s %s' % (prev_iter_ts, rep_tom, sub_ts
+                                                     ), shell = True)
+            
+        elif ite == 0:
+            check_output('newstack -mode 2 %s %s' % (ali, sub_ts), shell = True)
+            # if os.path.islink(sub_ts):
+            #     os.unlink(sub_ts)
+            # os.symlink(ali, sub_ts)
+
+            if supersample:
+                if 'SuperSampleFactor' not in out_tiltcom.dict:
+                    a_dict['SuperSampleFactor'] = 2
+                if 'ExpandInputLines' not in out_tiltcom.dict:
+                    a_dict['ExpandInputLines'] = None
+
+            if fakesirt:
+                if 'FakeSIRTiterations'  not in out_tiltcom.dict:
+                    a_dict['FakeSIRTiterations'] = fakesirt
+                
+            if 'RADIAL' in out_tiltcom.dict:
+                out_tiltcom.dict['RADIAL'] = [0.5,0.05]
+                a_dict['SuperSampleFactor'] = 2
+        
+        out_tiltcom.dict = update_comdict(out_tiltcom.dict, a_dict)
+        out_tiltcom.write_comfile(out_dir, change_name = 'sub_tilt.com')
+        imodscript('sub_tilt.com', out_dir)
+            
+            
+            
+            
+            
+            # a_dict = {'OutputFile': out_tom,
+            #       'InputProjections': sub_ts
+            #           }
+            
+            # if supersample:
+            #     if 'SuperSampleFactor' not in out_tiltcom.dict:
+            #         a_dict['SuperSampleFactor'] = 2
+            #     if 'ExpandInputLines' not in out_tiltcom.dict:
+            #         a_dict['ExpandInputLines'] = None
+            # if fakesirt:
+            #     if 'FakeSIRTiterations'  not in out_tiltcom.dict:
+            #         a_dict['FakeSIRTiterations'] = fakesirt
+                    
+            # out_tiltcom.dict = update_comdict(out_tiltcom.dict, a_dict)
+            # out_tiltcom.write_comfile(out_dir, change_name = 'sub_tilt.com')
+            # imodscript('sub_tilt.com', out_dir)
+
+
+#running stuff
+
+def write_to_log(log, s, debug = 1):
+    if debug > 0:
+        if s != '' or s != '\n':
+        #I would rather not print empty lines
+            f = open(log, 'a+')
+            f.write(s + '\n')
+            f.close()
+
+def progress_bar(total, prog):
+    """
+    Command line progress bar.
+    
+    """
+    bl, status = 40, ""
+    prog = float(prog)/float(total)
+    if prog >= 1.:
+        prog, status = 1., "\r\n"
+    block = int(round(bl * prog))
+    text = "\r[{}] {}% {}".format("=" * block + " " * (bl - block),
+               np.round((prog*100), decimals = 0),status)
+    sys.stdout.write(text)
+    sys.stdout.flush()
+    
+def kill_process(process, log = False, wait = 10, sig = signal.SIGTERM):
+    """
+    Attempt to find and terminate a process group relating to process.pid().
+    Else attempt to terminate the process.pid(). 
+    """
+    try:
+        pgid = os.getpgid(process.pid)
+        print(pgid)
+        os.killpg(pgid, sig)   
+        print(('\nKilling processchunks group PID %s.' % pgid))
+        if log:
+            com = process.communicate()
+            write_to_log(log, com[0].decode() + '\n' + com[1].decode() + 
+                     'run_split_peet: Terminating group PID %s\n' % pgid)  
+    except OSError:
+    #os.getpgid should return OSError if group doesnt exist (e.g. single PID)
+        try:
+            os.kill(process.pid, sig)
+            print(('\nKilling processchunks PID %s.' % pgid))
+            if log:
+                com = process.communicate()
+                write_to_log(log, com[0] + '\n'.encode() + com[1] + 
+                    'run_split_peet: Terminating PID %s\n'.encode() % process.pid)  
+        except:
+            print(('Unable to terminate process %s: No such process.'
+                  % process.pid))
+    except:
+        print('killpg: Unhandled Exception.')
+        raise
+        
+def check_ssh(hostname):
+    process = Popen(['ssh', '-q', hostname, 'exit'])
+    #com = process.communicate()
+    poll = process.poll()
+    #print (poll)
+    if poll == 0:
+        pass
+    else:
+        raise Exception('Could not ssh into %s, %s' % (hostname, poll))    
+        
+def run_generic_process(cmd, out_log = False, wait = True):
+    """
+    Run a shell command.
+    Inputs:
+        cmd [list of strings]
+    Optional:
+        out_log [str] path to output log.  Default False
+        wait [bool] wait for process to finish. Default True
+    """
+    #after writing this I realised imod does something very similar 
+    #with vmstopy...   
+    
+    if not isinstance(cmd, list):
+        raise TypeError('run_generic_process: cmd must be of type list')
+    try:
+        process = Popen(cmd, stdout = PIPE, stderr = PIPE, 
+                        preexec_fn=os.setsid)
+        if out_log:
+            if isfile(out_log):
+                os.rename(out_log, out_log + '~')
+            write_to_log(out_log,  str(datetime.datetime.now()) + '\n')
+            write_to_log(out_log, (' ').join(cmd) + '\n')
+            for line in iter(process.stdout.readline, ''.encode()):
+                # line = line.decode()
+                # if line == '':
+                #     break
+                # else:
+                write_to_log(out_log, line.decode().strip())
+            com = process.communicate()                
+            write_to_log(out_log, com[0].decode() + '\n' + com[1].decode())
+
+            if process.poll() != 0:
+                raise ValueError(('run_generic_process: Process' +
+                            ' returned non-zero status.  See %s') % out_log)
+        elif wait:
+            com = process.communicate()
+            p = process.poll()
+            if p != 0:
+                out_log = realpath('run_generic_process_error.log')
+                #com = process.communicate()
+                write_to_log(out_log, (' ').join(cmd))
+                write_to_log(out_log, com[0].decode() + '\n' + com[1].decode())
+                raise ValueError(('run_generic_process: Process returned' +
+                                 ' non-zero status.  See %s') % out_log)
+        else:
+            print(('run_generic_process: WARNING: ' +
+                   'Child process errors will not be caught.'))
+    except ValueError:
+        raise
+    except KeyboardInterrupt:
+        kill_process(process, out_log)      
+        raise
+    except:
+        print('run_generic_process: Unhandled Exception.')
+        out_log = realpath('run_generic_process_error.log')
+        write_to_log(out_log,  str(datetime.datetime.now()) + '\n')
+        write_to_log(out_log, (' ').join(cmd) + '\n')
+        if 'process' in locals():
+            kill_process(process)
+            com = process.communicate()
+            write_to_log(out_log, com[0].decode() + '\n' + com[1].decode())
+        raise
+
+def imodscript(comfile, abspath):
+    """Executes IMOD comfile but ignores "sys.exit" that's executed after successful completion.
+    """
+    comfile=comfile.split('.')[0]
+    check_output('vmstopy '+str(abspath)+'/'+str(comfile)+'.com '+str(abspath)+'/'+str(comfile)+'.log '+str(abspath)+'/'+str(comfile)+'.py',shell=True)
+    pwd=os.getcwd()
+    with open(str(abspath)+'/'+str(comfile)+'.py','r')as f:
+        lines=[]
+        for x in f.readlines():
+            if x=="    prnstr('SUCCESSFULLY COMPLETED', file=log)\n":
+                lines.append(str('    pass ##')+x)
+            elif x=='  sys.exit(exitCode)\n':
+                lines.append(str('##')+x)
+            elif x=='  log.close()\n':
+                lines.append(str('##')+x)
+            else:
+                lines.append(x)
+    with open(str(abspath)+'/'+str(comfile)+'.py','w')as f:
+        for x in lines:
+            f.writelines(x)
+    
+    sys.path.append(abspath)  #adds folder to path, can then execute python script as usual
+    os.chdir(abspath)
+    exec(compile(open(str(abspath)+'/'+str(comfile)+'.py').read(), str(abspath)+'/'+str(comfile)+'.py', 'exec'))
+    os.chdir(pwd)
+    sys.path.pop(-1) #removes last path entry
+    
+def run_split_peet(base_name, out_dir, base_name2, out_dir2, machines,
+                   logs = (False, False)):   
+    """
+    Run 2 sets of com scripts in parallel using processchunks.
+    Inputs:
+        base_name [str] base name of com files 
+        out_dir [str] path to directory containing com files
+        base_name2 [str] base name of com files 
+        out_dir2 [str] path to directory containing com files
+        machines [list of str] machine names for running, e.g. ['citra']*2
+    Optional:
+       logs [tuple of strings] names of output log files.  
+           Default (False, False)
+    """   
+    pwd = os.getcwd()
+    if not isinstance(machines, list):
+        machines = [machines]
+    if len(machines) < 2:
+        print(('run_split_peet: Warning: Only one machine specified. '+
+               'Both processchunks will be sent to the same core.'))
+        m1 = m2 = machines
+    else:
+        m1 = machines[:len(machines)//2]
+        m2 = machines[len(machines)//2:]
+    if not all(logs):
+        c_log1 = join(out_dir, 'processchunks.out')
+        c_log2 = join(out_dir2, 'processchunks.out')
+    else:
+        c_log1, c_log2 = realpath(logs[0]), realpath(logs[1])
+    if isfile(c_log1):
+        os.rename(c_log1, c_log1 + '~')
+    if isfile(c_log2):
+        os.rename(c_log2, c_log2 + '~')
+    try:
+        processchunks_terminated = 0
+        #process 1
+        os.chdir(out_dir)  
+        cmd = ['/bin/sh', 'processchunks', '-g', '-n', '18', '-P', 
+               (',').join(m1), base_name]
+                    #%s %s'
+                     #%((',').join(m1), base_name))
+        process = Popen(cmd, stdout = PIPE, stderr = PIPE, 
+                        preexec_fn=os.setsid)
+        write_to_log(c_log1, out_dir + '\n' + (' ').join(cmd) + '\n')
+        #process2
+        os.chdir(out_dir2)  
+        cmd2 = ['/bin/sh', 'processchunks', '-g', '-n', '18', '-P', 
+               (',').join(m2), base_name2]
+                     #%((',').join(m2), base_name2))
+        process2 = Popen(cmd2, stdout = PIPE, stderr = PIPE,
+                         preexec_fn=os.setsid)
+        write_to_log(c_log2, out_dir + '\n' + (' ').join(cmd2) + '\n')
+          
+        total_chunks1, total_chunks2 = 0, 0
+        chunks_done1, chunks_done2 = 0, 0
+        for output1, output2 in zip_longest(
+                        iter(process.stdout.readline, ''.encode()),
+                        iter(process2.stdout.readline, ''.encode())):
+            advance_bar = False
+
+            if output1 != None:
+                output1 = output1.decode()
+                write_to_log(c_log1, output1.strip())
+                if output1.split()[3:6] == ['DONE', 'SO', 'FAR']:
+                    total_chunks1 = max(int(output1.split()[2]), total_chunks1)
+                    chunks_done1 = max(int(output1.split()[0]), chunks_done1)
+                    advance_bar = True
+                elif output1.split()[:2] == ['ALL', 'DONE']:
+                    total_chunks1 = chunks_done2 = total_chunks1
+                    advance_bar = True                    
+            if output2 != None:
+                output2 = output2.decode()
+                write_to_log(c_log2, output2.strip())
+                if output2.split()[3:6] == ['DONE', 'SO', 'FAR']:
+                    total_chunks2 = max(int(output2.split()[2]), total_chunks2)
+                    chunks_done2 = max(int(output2.split()[0]), chunks_done2)
+                    advance_bar = True
+                elif output2.split()[:2] == ['ALL', 'DONE']:
+                    total_chunks2 = chunks_done2 = total_chunks2
+                    advance_bar = True                    
+            if advance_bar:
+                total_chunks = total_chunks1 + total_chunks2
+                chunks_done = chunks_done1 + chunks_done2
+                progress_bar(total_chunks, chunks_done)   
+            panic_msg = (('').join(['#']*30) + '\n' +
+                         'SOMETHING HAS GONE WRONG, DUMPING STDERR, STDOUT:\n')
+
+            if process.poll() != None and output1 == None:
+                #poll stil returns integer, not bytes in python3
+                #have to check if there is still output in the PIPE because
+                #of race condition with process.poll()
+                #some processchunks errors return 0 status:
+                #when done, check return status but also if chunks are done
+                if (process.poll() != 0
+                or (process.poll() == 0 and chunks_done1 < total_chunks1)
+                or (process.poll() == 0 and chunks_done1 == 0)):                    
+                    com = [m.decode() for m in process.communicate()]
+                    write_to_log(c_log1, 
+                                 'Processchunks status %s' % process.poll())
+                    write_to_log(c_log1, panic_msg)
+                    write_to_log(c_log1, com[0] + '\n' + com[1])
+                    if process2.poll() == None: 
+                        kill_process(process2, log = c_log2)
+                    processchunks_terminated = 1
+                    raise ValueError('Processchunks returned non-zero status.')
+            if process2.poll() != None and output2 == None:
+                if (process2.poll() != 0
+                or (process2.poll() == 0 and chunks_done2 < total_chunks2)
+                #somehow I've managed to get chunks_done2 > total_chunks2?
+                or (process2.poll() == 0 and chunks_done2 == 0)):                    
+                    com = [m.decode() for m in process2.communicate()]
+                    print('#############%s' % str(com))                
+                    write_to_log(c_log2, 
+                                 'Processchunks status %s' % process2.poll())
+                    write_to_log(c_log2, panic_msg)
+                    write_to_log(c_log2, com[0] + '\n' + com[1])                    
+                    if process.poll() == None:
+                        kill_process(process, log = c_log1)
+                    processchunks_terminated = 1
+                    raise ValueError('Processchunks returned non-zero status.')
+    except ValueError:
+        if processchunks_terminated == 1:
+            raise
+        else:
+            kill_process(process, log = c_log1)
+            kill_process(process2, log = c_log2)
+            raise
+    except KeyboardInterrupt:
+        kill_process(process, log = c_log1)
+        kill_process(process2, log = c_log2)        
+        raise
+    except:
+        print('run_split_peet: Unhandled Exception.')
+        kill_process(process, log = c_log1)
+        kill_process(process2, log = c_log2)    
+        raise
+    else:
+        os.chdir(pwd)

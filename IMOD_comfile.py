@@ -9,6 +9,14 @@ from os.path import realpath, join, isfile, isdir, split
 import numpy as np
 
 class IMOD_comfile:
+    """
+    Class for parsing and manipulation of IMOD comfiles, stored as a dictionary.
+    
+    Most comfiles (e.g. tilt.com) contain parameters for a single program.
+    align.com is the exception, it contains parametrs for tiltalign and xfproduct
+    and is stored as two sets of dictionaries. 
+    
+    """
     
     def __init__(self, rec_dir, com_name, **kwargs):
         self.rec_dir = realpath(rec_dir)
@@ -108,6 +116,8 @@ class IMOD_comfile:
         
         with open(realpath(join(self.rec_dir, self.com_name)),'r') as f1:
             lines = [x for x in f1.readlines()]
+            
+        #for align.com:
         split_com_str = '$xfproduct -StandardInput\n'
         if split_com_str in lines:
             s_lines = [lines[:lines.index(split_com_str)],
@@ -192,6 +202,21 @@ class IMOD_comfile:
             return ''
         
     def get_imod_base_name(self, return_keys =  False):
+        """
+        Attempt to extract Imod base name. 
+
+        Parameters
+        ----------
+        return_keys : bool, optional
+            Returns Imod base name, suffixes and a list of keys that are
+            expected to be paths. The default is False.
+
+        Returns
+        -------
+        str
+            Imod base name.
+
+        """
         all_paths = []
         path_keys = []
         for key in self.dict.keys():
@@ -201,7 +226,7 @@ class IMOD_comfile:
                     all_paths.append(tmp)
                     path_keys.append(key)
         prefix = os.path.commonprefix(all_paths)
-        #I don't know if this is fully general... but it takes care of the 
+        #This is likely not fully general... but it takes care of the 
         #case where all extensions are .something
         if prefix.endswith('.'):
             prefix = prefix[:-1]
@@ -211,7 +236,20 @@ class IMOD_comfile:
         else:
             return prefix
         
-    def point2out_dir(self, out_dir =  False, base_name = False, imod_base_name = False):
+    def point2out_dir(self, out_dir = False, base_name = False):
+        """
+        Modify path parameters to point to output directory.
+
+        Parameters
+        ----------
+        out_dir : str, optional
+            Path to output directory. Optional if self.out_dir is set.
+            The default is False.
+        base_name : str, optional
+            Imod base name. Optional if self.base_name is set.
+            The default is False.
+
+        """
         if not out_dir:
             out_dir = self.out_dir
         if not base_name:
@@ -226,8 +264,34 @@ class IMOD_comfile:
                 
                       
     def write_comfile(self, out_dir = False, change_name = False):
+        """
+        Writes comfile with absolute paths.
+
+        Parameters
+        ----------
+        out_dir : str, optional
+            Output directory. The default is False.
+        change_name : str, optional
+            Name of output comfile. The default is False.
+
+        """
 
         def guess_separator(key):
+            """
+            Try to guess separator if it's missing. E.g. if an entry contains
+            a list/tuple it will be separated by a comma...
+
+            Parameters
+            ----------
+            key : str
+                Key name.
+
+            Returns
+            -------
+            str
+                separator.
+
+            """
             
             if key in self.separator_dict.keys():
                 return self.separator_dict[key]
@@ -270,7 +334,12 @@ class IMOD_comfile:
                 separator = guess_separator(key)
                 if separator == None: #keeping None in separator_dict  for readability, changing here
                     separator = ''
-                val = (separator).join(self._val2str(self.dict[key]))
+                try:
+                    val = (separator).join(self._val2str(self.dict[key]))
+                except:
+                    print('key:value', key, self.dict[key])
+                    raise
+                    
                 outstr+= '%s\t%s\n' % (key, val)
             for foot in self.footer:
                 outstr += foot + '\n'   
@@ -292,8 +361,7 @@ class IMOD_comfile:
             
     def get_command_list(self, exclude_keys = ['RADIAL', 'FalloffIsTrueSigma',
                         'ActionIfGPUFails', 'UseGPU', 'FakeSIRTiterations'],
-                          append_to_exclude_keys = [], program = False,
-                          ):
+                          append_to_exclude_keys = []):
         """
         Generate a command list that can be passed to subprocess.Popen
         Secondary commands (e.g. xfproduct in align.com) are not supported....
@@ -301,7 +369,7 @@ class IMOD_comfile:
         Parameters
         ----------
         exclude_keys : list of strings, optional
-            List of keys. The default is ['RADIAL', 'FalloffIsTrueSigma'].
+            List of keys to exclude. The default is ['RADIAL', 'FalloffIsTrueSigma'].
         append_to_exclude_keys : list of strings, optional
             Append to default exclude_keys. The default is [].
 
@@ -318,7 +386,7 @@ class IMOD_comfile:
                 return None
             if isinstance(self.dict[key], (list, tuple, np.ndarray)):
                 return ','
-            
+        
         for head in self.header:
             if head.endswith('StandardInput'):
                 program = head.split()[0].strip('$')
@@ -341,6 +409,3 @@ class IMOD_comfile:
             cmd_list.append(val)
             
         return cmd_list
-        
-    
-        #remember excludelist

@@ -16,7 +16,7 @@ from flexo_tools import (get_apix_and_size, find_nearest, make_lamella_mask,
                          get_mod_motl_and_tomo, bin_model,
                          make_non_overlapping_pcl_models,
                          fid2ndarray, optimal_lowpass_list)
-from flexo_whole_image_tools import replace_pcles, reproject_volume, mask_from_plotback, match_tomos, get2d_mask_from_plotback, tomo_subtraction
+from flexo_tools import replace_pcles, reproject_volume, mask_from_plotback, match_tomos, get2d_mask_from_plotback, tomo_subtraction
 from flexo_tools import (machines_from_imod_calib, write_mrc, prepare_prm,
                          peet_halfmaps, ctf_convolve_andor_dosefilter_wrapper,
                          extract_2d, ncc, optimal_lowpass, combine_fsc_halves, plot_fsc,
@@ -46,12 +46,13 @@ class Flexo:
                  #running params
                  mask_tomogram = True, noisy_ref = False, phaseflip = True,
                  use_existing_fid = False, add_fiducial_model = [],
-                 machines = 1, limit = 10, interp = 10, centre_bias = 0.01,
-                 thickness_scaling = 0.5, allow_large_jumps = False,
+                 machines = 1, limit = 10, interp = 10, 
+                 allow_large_jumps = False,
                  non_overlapping_pcls = True,
                  use_init_ali = False, spec_tiny_size = 2,
                  pcls_per_core = 40, butter_order = 4, dosefilter = False,
                  debug = 2,
+                 n_peaks = 5, #5 seems to work quite well
                  #iteration
                  num_iterations = 2, iters_done = 0,
                  #tomogram
@@ -70,12 +71,19 @@ class Flexo:
                  noisy_ref_std = 5,
                  apply_2d_mask = True,
                  exclude_worst_pcl_fraction = 0.1,
-                 exclude_lowest_cc_fraction = 0.3,
+                 exclude_lowest_cc_fraction = False,
                  min_neighbours = 7,
                  use_local_median_shifts = False,
                  use_median_cc_maps = False,
                  shift_std_cutoff = 3,
+                 use_nbr_median = False,
+                 use_davens_fsc = False,
                  **kwargs):
+        
+        """
+        Final checklist:
+            switch to simple fsc
+        """
         
         print('DEV NOTE use_existing_fid is False for toy data')
         #plt.ioff()        
@@ -171,7 +179,7 @@ class Flexo:
             self.box_size = kwargs.get('box_size') #non square boxed don't make sense here
             self.limit = limit
             self.interp = interp
-            self.n_peaks = 5
+            self.n_peaks = n_peaks
             
             self.particle_interaction_distance = kwargs.get('particle_interaction_distance')
             
@@ -180,8 +188,6 @@ class Flexo:
             self.non_overlapping_pcls = non_overlapping_pcls
             self.noisy_ref = noisy_ref
             
-            self.centre_bias = centre_bias
-            self.thickness_scaling = thickness_scaling
             self.allow_large_jumps =  allow_large_jumps
             self.dilation_size = 0
             
@@ -232,6 +238,7 @@ class Flexo:
             #self.separate_groups = kwargs.get('separate_groups')
             self.n_patches = kwargs.get('n_patches')
             self.fidn = fidn
+            self.MinSizeOrOverlapXandY = kwargs.get('MinSizeOrOverlapXandY') 
             self.global_only = global_only
             
             self.RotOption = kwargs.get('RotOption') #taken from aligncom by defualt
@@ -286,7 +293,7 @@ class Flexo:
             self.keep_peet_binning = keep_peet_binning #run peet at whatever binning the specified peet was run
             self.noisy_ref_std = noisy_ref_std
             self.exclude_worst_pcl_fraction = exclude_worst_pcl_fraction #exclude particles with the worst median ccc. 0/False disables this
-            self.exclude_lowest_cc_fraction = exclude_lowest_cc_fraction
+            self.exclude_lowest_cc_fraction = exclude_lowest_cc_fraction #Removes the worst scoring shifts. NOT RECOMMENDED
             #self.use_refined_halfmap_models = use_refined_halfmap_models #i.e. combined halfmap models are used for plotback generation
             self.masktomrec_iters = kwargs.get('masktomrec_iters')
             self.min_neighbours = min_neighbours
@@ -294,6 +301,9 @@ class Flexo:
             self.use_median_cc_maps = use_median_cc_maps #take median of cc maps of local particles, get shifts from these (SLOWWW)
             self.shift_std_cutoff = shift_std_cutoff
             
+            #to be deprecated:
+            self.use_nbr_median = use_nbr_median #if True, ignore weighted mean function, which is wrong anyway. Using weighted mean seems to produce very slightly better results.
+            self.use_davens_fsc  = use_davens_fsc#faster, looks worse
 
         self.update_comfiles()
     
@@ -754,7 +764,9 @@ class Flexo:
         else:
             a_dict['LocalAlignments'] = 1
         if self.NoSeparateTiltGroups is not None:
-            a_dict['NoSeparateTiltGroups'] = self.NoSeparateTiltGroups,
+            a_dict['NoSeparateTiltGroups'] = self.NoSeparateTiltGroups
+        if self.MinSizeOrOverlapXandY is not None:
+            a_dict['MinSizeOrOverlapXandY'] = self.MinSizeOrOverlapXandY
         if OFFSET:
             a_dict['AngleOffset'] = OFFSET
         if self.RotOption:
@@ -1506,7 +1518,8 @@ class Flexo:
             cc_weight_exp = 5,
             plot_pcl_n = self.plot_pcls,
             min_neighbours = self.min_neighbours,
-            shift_std_cutoff = self.shift_std_cutoff)    
+            shift_std_cutoff = self.shift_std_cutoff,
+            use_nbr_median = self.use_nbr_median)    
         self.out_fid = self.particles.write_fiducial_model(self.ali, use_local_medians = self.use_local_median_shifts)
         
         self.flg_shifts_exist = True
@@ -1617,7 +1630,7 @@ class Flexo:
                     self.fsc_dirs = [self.init_peet_dir]
                 else:
                     self.peet_apix = self.prep_peet(self.init_peet_dir, 'init')
-                    peet_halfmaps(self.init_peet_dir, self.prm1, self.prm2, self.machines)
+                    peet_halfmaps(self.init_peet_dir, self.prm1, self.prm2, self.machines, use_davens_fsc = self.use_davens_fsc)
                     self.fsc_dirs.append(self.init_peet_dir)
             
             self.peet_apix = self.prep_peet(self.peet_dir, self.peet_tomo)
@@ -1625,7 +1638,7 @@ class Flexo:
             self.flg_peet_ran = True # this needs to be here in case peet crashes and a restart is attempted
             self.to_json()
             
-            peet_halfmaps(self.peet_dir, self.prm1, self.prm2, self.machines)
+            peet_halfmaps(self.peet_dir, self.prm1, self.prm2, self.machines, use_davens_fsc = self.use_davens_fsc)
             self.fsc_dirs.append(self.peet_dir)
 
         self.res = plot_fsc(self.fsc_dirs, self.peet_dir, self.cutoff, self.peet_apix)
@@ -1747,6 +1760,9 @@ class Flexo:
         #should be possible to restart from any point of any iteration
         #restart technically onle needs curr_iter and out_dir
         #remake tomos - IMOD control by changing parameters in the previous iteration com files
+        
+        #def modify_iteration_inputs():
+            
             
         def restart():
             init_flags = ['flg_inputs_verified', 'flg_image_data_exist',

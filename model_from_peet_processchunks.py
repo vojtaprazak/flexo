@@ -158,9 +158,13 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
     else:
         lamella_mask_path = False    
         
+        
     reprojected_tomogram_path = join(
             out_dir, base_name + '_reprojected.ali')
+    #fiiiiiiiiiiiiiiiiiiix
     full_tomo = join(rec_dir, base_name + '_full.rec')
+    if not os.path.isfile(full_tomo):
+        full_tomo = join(rec_dir, base_name + '_full_rec.mrc')
     out_mask = join(out_dir, 'binary_mask.mrc')
     masked_tomo = join(out_dir, 'masked_%s.mrc') % base_name
 
@@ -177,7 +181,6 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
     
     print('Generating reference tilt series.')
     if noisy_ref:
-        non_overlapping_pcls = False
         use_init_ali = True
         
     if not non_overlapping_pcls:  
@@ -190,11 +193,6 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
                     tlt, ali, average_volume_binning, False, False, var_str,
                     lamella_mask_path)              
 
-        reprojected_tomogram_path = join(
-                out_dir, base_name + '_reprojected.ali')
-        full_tomo = join(rec_dir, base_name + '_full.rec')
-        out_mask = join(out_dir, 'binary_mask.mrc')
-        masked_tomo = join(out_dir, 'masked_%s.mrc') % base_name
         tmp_out = join(
                 out_dir, base_name + '_tmp.ali')
 
@@ -259,6 +257,19 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
         #Also makes the equivalent tilt series where overlapping particles are 
         #subtracted.  
         
+        if noisy_ref:
+            reproject_volume(full_tomo, ali, tlt, tomo_size[2],
+                         reprojected_tomogram_path, var_str)
+            run_generic_process(['newstack', '-mea', '0,1',
+                                 reprojected_tomogram_path,
+                                 reprojected_tomogram_path])
+
+        else:
+            reprojected_tomogram_path = False
+            
+
+            
+        
         (group_path, sub_ali_list, plotback_ali_list, ssorted_path, 
          plotback_list, out_mask_list, smooth_mask_list
          ) = format_nonoverlapping_alis(
@@ -269,7 +280,16 @@ def flexo_model_from_peet(rec_dir, out_dir, base_name, model_file,
                 average_volume_binning,
                 lamella_mask_path,
                 threshold = threshold,
-                use_init_ali = use_init_ali)
+                use_init_ali = use_init_ali,
+                noisy_ref = noisy_ref,
+                reprojected_tomogram_path = reprojected_tomogram_path)
+             
+        if noisy_ref:
+            #have to overwrite sub_ali_list!!!!
+            sub_ali_list = [join(
+                out_dir, base_name + '_initial.ali')]*len(plotback_ali_list)
+            
+            copyfile(ali, sub_ali_list[0])
         
         if orthogonal_subtraction:
             g0 = np.load(group_path)

@@ -4,10 +4,14 @@ Created on Mon Apr  4 09:54:43 2022
 
 @author: vojta
 """
-import dateutil
+#import dateutil
 from dateutil import parser as dparser
 import numpy as np
 class Mdoc_parser:
+    """
+    Parse IMOD mdoc file. No promises made.
+    
+    """
     def __init__(self, mdoc):
         self.mdoc = mdoc
         
@@ -19,8 +23,6 @@ class Mdoc_parser:
         self.dose_per_tilt = None
         self.tilt_angles = None
         self.exposure_times = None
-        
-        
         
         self.tilt_dict_list = self.parse_mdoc()
         self.sort_by_datetime()

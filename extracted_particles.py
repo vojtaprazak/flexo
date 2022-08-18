@@ -6,27 +6,28 @@ Created on Mon May 16 14:41:20 2022
 """
 
 from os.path import join, abspath, realpath, isfile
-import sys
 import numpy as np
 from PEETModelParser import PEETmodel
-from scipy.optimize import minimize
 from copy import deepcopy
 import warnings
 import matplotlib.pyplot as plt
 from scipy.signal import gaussian
 from scipy.ndimage import filters
 from scipy.spatial import KDTree
-from scipy.spatial.distance import cdist
 from subprocess import check_output
 from skimage.filters import threshold_yen
 from scipy.ndimage import gaussian_filter
 import mrcfile
 import time
+#from scipy.spatial.distance import cdist
+#from scipy.optimize import minimize
+#import sys
 
 from flexo_tools import find_nearest, get_apix_and_size, get_peaks
 
 class Extracted_particles:
     """
+    Class for processing shifts calculated by Flexo _extract_and_cc.
     
     """
     def __init__(self, sorted_pcls, cc_peaks = False, out_dir = False,
@@ -34,12 +35,10 @@ class Extracted_particles:
                  chunk_base = False, n_peaks = 5, excludelist = [],
                  groups = False, tilt_angles = False, model_3d = False,
                  apix = False, exclude_worst_pcl_fraction = 0.1,
-                 exclude_lowest_cc_fraction = 0.3, **kwargs):
-        """
-        
-        """
-        self.sorted_pcls = sorted_pcls
-        self.out_dir = out_dir
+                 exclude_lowest_cc_fraction = False, **kwargs):
+
+        self.sorted_pcls = sorted_pcls #see flexo_tools.fid2ndarray for deets
+        self.out_dir = out_dir #flexo output dir
         self.xcor_dir = kwargs.get('xcor_dir')
         self.extracted_pcls_dir = kwargs.get('extracted_pcls_dir')
         self.base_name = base_name
@@ -48,9 +47,7 @@ class Extracted_particles:
         self.excludelist = excludelist
         self.groups = groups
         self.tilt_angles = tilt_angles
-        self.tilt_subset = False
-        self.dist_matrix = False
-        self.dist_score_matrix = False        
+        self.tilt_subset = False   
         self.shifts = False
         self.shift_mask = False
         self.cc_values = False
@@ -75,6 +72,10 @@ class Extracted_particles:
 
     
     def update_indices(self):
+        """
+        Updates some attributes, useful after removing tilts/particles.
+
+        """
         if isinstance(self.groups, str):
             self.groups = np.load(self.groups)
         if isinstance(self.sorted_pcls, str):
@@ -90,6 +91,7 @@ class Extracted_particles:
                                 for x in open(self.tilt_angles)])
 
     def remove_tilts_using_excludelist(self, excludelist = []):
+
         #this must be run exactly once
         if not self.flg_excludelist_removed:
             if not (isinstance(excludelist, bool)
@@ -104,9 +106,9 @@ class Extracted_particles:
         
     def remove_group_outliers(self, groups = False):
         """
-        remove particles that will not be extracted due to
-        
-        using non_overlapping_pcls can cause particles to be excluded
+        Remove particles that were not extracted due to their non_overlapping_pcls
+        group being too small.
+ 
         """
         if not self.flg_outliers_removed:
             if not isinstance(groups, bool):
@@ -138,6 +140,10 @@ class Extracted_particles:
 
     
     def read_3d_model(self, model_3d = False):
+        """
+        Read 3D (PEET) particle model 
+
+        """
         if isinstance(model_3d, str):
             self.model_3d = model_3d
         if isinstance(self.model_3d, str):
@@ -153,17 +159,15 @@ class Extracted_particles:
         if mod_path:
             self.model_3d = np.array(PEETmodel(mod_path).get_all_points())
             self.remove_group_outliers()
-        #VP 7/5/2021
-        #temoporarily? removed:
-        #if (np.absolute(np.mean(self.sorted_pcls[:,:,1] - self.model_3d[:, 1]))
-        #    > 1):
-        #    raise ValueError('3D model does not match particle coordinates.')
+
         
     def read_cc_peaks(self, out_dir = False, chunk_base = False,
-                      spec_path = False, name_ext = 'peaks'):
+                      spec_path = False, name_ext = 'peaks',
+                      use_shift_gradient = False):
         """
-        Reads in pickled arrays of cc_peaks.  Can be specified as tuple
-        of paths or using output directory and chunk base.
+        Reads pickled numpy arrays of cc_peaks (output from Flexo _extract_and_cc).
+        Files be specified as tuple of paths or through directory path and
+        base name.
         
         self.shifts has shape [num_tilts, num_pcls, n_peaks, 3
                                  (xshift, yshift)]
@@ -200,20 +204,34 @@ class Extracted_particles:
         
         self.shift_mask = np.logical_and((self.cc_values > 0)[..., None], self.shift_mask)
 
-        # #mask ccc <= 0
-        # self.cc_values = np.ma.masked_less_equal(self.cc_values, 0)
-        # cc_mask = np.ma.getmask(self.cc_values)
-        # cc_mask = np.stack((cc_mask, cc_mask), axis = 3)
-        # self.shifts = np.ma.masked_where(cc_mask, self.shifts)
-
         #get rid of the worst scoring particles entirely
         if self.exclude_worst_pcl_fraction:
-            peak_median = np.ma.median(self.cc_values[:, :, 0], axis = 0)
-            thr_cc = np.sort(peak_median)[int(np.round(peak_median.shape[0]*self.exclude_worst_pcl_fraction))]
-            med_mask = peak_median <= thr_cc
-            self.shift_mask[:, med_mask] = False 
+
+            if use_shift_gradient:
+                #clean by sigma of the first derivative of shifts
+                #in other words get rid of particles that jump all over the place
+                #this performs slightly worse than excluding particles by ccc
+                dmag = np.sqrt(self.shifts[:, :, 0, 0]**2 + self.shifts[:, :, 0, 1]**2)
+                fder = np.gradient(dmag, axis = 0)
+                fder = np.ma.masked_array(fder, mask = np.logical_not(self.shift_mask[:, :, 0, 0]))
+                self.nice_tilts(find_nearest(self.tilt_angles, 0))
+                fder = fder[self.tilt_subset]
+                s_fder = np.ma.std(fder, axis = 0)
+                thr_s = np.sort(s_fder)[int(np.round(s_fder.shape[0]*self.exclude_worst_pcl_fraction))]
+                med_mask = s_fder <= thr_s
+                self.shift_mask[:, med_mask] = False
+                
+            else:
+                peak_median = np.ma.median(self.cc_values[:, :, 0], axis = 0)
+                thr_cc = np.sort(peak_median)[int(np.round(peak_median.shape[0]*self.exclude_worst_pcl_fraction))]
+                med_mask = peak_median <= thr_cc
+                self.shift_mask[:, med_mask] = False 
             
     def read_cc_maps(self, map_base = 'ccmap'):
+        """
+        Reads in cross-correlation maps (output from Flexo _extract_and_cc).
+
+        """
         
         if not self.extracted_pcls_dir:
             raise ValueError('Input paths not specified')
@@ -232,6 +250,30 @@ class Extracted_particles:
 
     def cluster_pcls(self, z_bias = 3, neighbour_distance = 10,
                      min_neighbours = 10):
+        """
+        Get 3D paticle distribution for distance weighting.
+
+        Parameters
+        ----------
+        z_bias : int or float, optional
+            The Z coordinates are simply multiplied by this factor.
+            Values > 1 result in finer separation in the Z direction. 
+             The default is 3.
+        neighbour_distance : int or float, optional
+            Particles within this distance (in voxels) will be groupped together.
+            The default is 10.
+        min_neighbours : int, optional
+            Minimum number of particles per local group. The default is 10.
+
+        Returns
+        -------
+        dst : ndarray
+            Interparticle distances.
+        pos : TYPE
+            Indices of particles considered to be part of the local group.
+
+        """
+        
         #get neighbouring particles        
         tree = KDTree(self.model_3d*[1, 1, z_bias])
         dst, pos = tree.query(self.model_3d*[1, 1, z_bias],
@@ -260,14 +302,90 @@ class Extracted_particles:
                                         subtract_global_shift = True,
                                         figsize = (12,12),
                                         smooth_neighbouring_tilts = False,
-                                        min_neighbours = 2):
+                                        min_neighbours = 2,
+                                        use_nbr_median = False):
+        """
+        This method attempts to select a single shift for each particle in each
+        tilt from a set of cross correlation peaks. Typically, multiple peaks 
+        are extracted from each cross-correlation map in case the maximum ccc
+        peak has unreasonably high shift.
+        
+        1) Shifts that are [shift_std_cutoff] sigma larger than the median shift
+        (per tilt) are removed.
+        2) For each particle, the median shift of the local group of particles
+            is determined. The shifts, for this particle, are then scored based
+            on their ccc and distance from the median group shift. 
+            
+        
+        The output is a mask with at most one shift left for each particle in 
+        each tilt.
+        
+
+        Parameters
+        ----------
+        neighbour_distance : int or float, optional
+            Particles within this distance (in voxels) will be groupped together.
+            The default is 70.
+        n_peaks : ind, optional
+            Number of peaks in each cross-correlation map that wil be analysed.
+            The default is 5.
+        cc_weight_exp : int, optional
+            Exponent for scaling ccc. Shifts are scored by 1/ccc**cc_weight_exp. 
+            The default is 5.
+        plot_pcl_n : list, optional
+            Write plots for particles with specified indices. The default is False.
+        z_bias : int or float, optional
+            Used for groupping particles in 3D.
+            The Z coordinates are simply multiplied by this factor.
+            Values > 1 result in finer separation in the Z direction.
+            The default is 3.
+        shift_std_cutoff : int or float, optional
+            Shifts larger than [shift_std_cutoff]*global shift std are disregarded.
+            The default is 3.
+        subtract_global_shift : bool, optional
+            Subtract global shift for each tilt. This is only used during shift
+            selection, the value of selected shifts written out as fiducial model
+            are unaffected. 
+            The default is True.
+        figsize : tuple of 2 ints, optional
+            Size of particle plot in inches. The default is (12,12).
+        smooth_neighbouring_tilts : bool, optional
+            Apply smoothing ACROSS tilts. The default is False.
+        min_neighbours : int, optional
+            Minimum number of particles for local groups. The default is 2.
+        use_nbr_median: bool, optional
+            Use median shift of local groups (using max ccc shift of each particle)
+            instead of weighted mean. Performs slightly worse.
+            The default is False.
+
+        """
         
         def weighted_mean(vals, distances, exp = 2, axis = 0, stdev = False):
-    
-            #weights = 1/np.array(distances, dtype = float)**exp
-            #if not isinstance(vals, np.ndarray):
-            #    vals = np.array(vals)
-    
+            """
+            Weight shifts by 3D particle distances.
+
+            Parameters
+            ----------
+            vals : ndarray
+                Particle shifts.
+            distances : ndarray
+                3D particle distances.
+            exp : int or float, optional
+                Exponent for 3D distance scaling. Larger values favour closer 
+                particles. The default is 2.
+            axis : int, optional
+                Axis of input ndarray along which the mean is calculated.
+                The default is 0.
+            stdev : bool, optional
+                Return stdev. The default is False.
+
+            Returns
+            -------
+            ndarray
+                Local group weighted mean shifts.
+
+            """            
+
             weights = 1./distances**exp
     
             if isinstance(vals, np.ma.masked_array):
@@ -295,25 +413,68 @@ class Extracted_particles:
     
         def cc_distance_weight_neighbours(shifts, cc_values, pcl_index, dst, pos,
                                           n_peaks = 5, cc_weight_exp = 3,
-                                          cc_weight = True):
+                                          cc_weight = True, use_self = False):
             """
-            Shifts are weighted sequentially be CCC and then (3D) distance from
-            neighbouring particles
+            Calculate weighted mean shift of the local group of particles
+            (local in 3D). Multiple shifts [n_peaks], weighted by their ccc
+            are used for each particle.
+            
+            Parameters
+            ----------
+            shifts : ndarray
+                All shifts.
+            cc_values : ndarray
+                All cc values.
+            pcl_index : int
+                Index of particle to be analysed.
+            dst : ndarray
+                Array of particle-particle distances.
+            pos : ndarray
+                Array of local group indices.
+            n_peaks : int, optional
+                Number of shifts used for analysis. The default is 5.
+            cc_weight_exp : int or float, optional
+                ccc scaling. Larger values favour high ccc shifts.
+                The default is 3.
+            cc_weight : bool, optional
+                If False, use only max ccc shift for each particle.
+                The default is True.
+            use_self : bool, optional
+                Include subject particle in mean calculation. The distance
+                (weight) is set to 1. Using this seems to produce worse results,
+                likely due to the subject paricle being weighted too strongly.
+                The default is False.
+
+            Returns
+            -------
+            wmn : ndarray
+                Weighted mean shifts.
+            wstd : ndarray
+                stdev.
+
             """
     
             #pick neighbours within distance limit. First index is pcl_index,
             #filler value is 1 + num_pcls 
-            nbr_indices = np.unique(pos[pcl_index][1:])[:-1]
+            if use_self:
+                starting_index = 0
+            else:
+                starting_index = 1
+            nbr_indices = np.unique(pos[pcl_index][starting_index:])[:-1]
             nbr_shifts = shifts[:, nbr_indices]
             nbr_shifts = nbr_shifts[:, :, :n_peaks]
             nbr_cccs = cc_values[:, nbr_indices]
             nbr_cccs = nbr_cccs[:, :, :n_peaks]
-            nbr_dist = dst[pcl_index][dst[pcl_index] != np.inf][1:]
+            nbr_dist = dst[pcl_index][dst[pcl_index] != np.inf][starting_index:]
+            if use_self:
+                nbr_dist += 1
+
             
             if cc_weight:
                 #use fraction of neighbour max ccc instead of raw ccc
                 cc_ratios = (nbr_cccs/
                              nbr_cccs[:, :, 0][:, :, None])**cc_weight_exp
+
                 #weight shifts of each neighbouring particle using ccc_ratios
                 cc_w_mn = (np.sum(nbr_shifts*cc_ratios[:, :, :, None], axis = 2)
                            /np.sum(cc_ratios[:, :, :, None], axis = 2))
@@ -365,19 +526,46 @@ class Extracted_particles:
             return tilt_weighted
     
         def score_shifts(shifts, cc_values, wshifts, pcl_index, n_peaks = 10, 
-                          cc_weight_exp = 5, dist_weight_exp = 2,
-                          return_mask = False):
-    
+                          cc_weight_exp = 5, dist_weight_exp = 2):
             """
+            Score shifts based on their distance to local group weighted mean
+            and ccc.
+            
             Score of shifts from a reference shift (wshift):
                 [euclidian distance]**exp1/[ratio of max CCC]***exp2
-    
+
+            Parameters
+            ----------
+            shifts : ndarray
+                All shifts.
+            cc_values : ndarray
+                All cc values.
+            wshifts : ndarray
+                local group weighted mean shifts.
+            pcl_index : int
+                Subject particle index.
+            n_peaks : int, optional
+                Number of considered shifts. The default is 10.
+            cc_weight_exp : int or float, optional
+                Scaling of ccc values. The default is 5.
+            dist_weight_exp : int or float, optional
+                Scaling of shifts. Larger values prioritise smaller shifts.
+                The default is 2.
+
+            Returns
+            -------
+            ndarray
+                Particle mask with a single True value for the selected shift.
+
             """
     
             def euc_dist(a, b):
-                # m = np.absolute(np.min((np.min(a), np.min(b))))
-                # a = deepcopy(a) + m
-                # b = deepcopy(b) + m
+                """
+                Calculate element-wise euclidian distance between two arrays.
+                Masked arrays "should" be preserved correctly.
+
+                """
+            
                 mask = False
                 if isinstance(a, np.ma.core.MaskedArray):
                     mask = a.mask[..., 0]
@@ -390,19 +578,13 @@ class Extracted_particles:
                 if not isinstance(mask, bool):
                     s = np.ma.masked_array(s, mask = mask)
                 return s
-            
-    
-            # print('saving shifts for debugging')
-            # np.save('shifts.npy', shifts[:, pcl_index, :n_peaks].data)
-            # np.save('wshifts.npy', wshifts[:, None])
-            # np.save('shifts_mask.npy', shifts[:, pcl_index, :n_peaks].mask)
-        
-            
+         
             distance = euc_dist(shifts[:, pcl_index, :n_peaks],
                                 wshifts[:, None])
             cc_ratios = (cc_values[:, pcl_index, :n_peaks]  
                          /cc_values[:, pcl_index, 0, None])
     
+            #minimisation
             sc = (distance**dist_weight_exp)/cc_ratios**cc_weight_exp     
     
             #using masked arrays to keep any mask that's applied to wshifts
@@ -432,9 +614,7 @@ class Extracted_particles:
                 m[bummer[0]] =  tmpm
                 warnings.warn('Pcl %s: %s maps had more than 1 shift after weighting'
                               % (pcl_index, mshape[0]))
-            
-            if return_mask:
-                return m
+            return m
     
         def plot_weighted_pcl(self, pcl_index, tilt_mean, weighted_std, 
                               figsize = (12,12), out_dir = False):
@@ -489,15 +669,14 @@ class Extracted_particles:
             var = filters.convolve1d(np.power(series-average, 2), b/b.sum())
             return var, average
             #nehalemslab.net/prototype/blog/2014/04/12/how-to-fix-scipys-interpolating-spline-default-behaviour/
+            
+        def get_nbr_median(pos, pcl_index, tmp_shifts):
+            nbr_indices = np.unique(pos[pcl_index])[:-1]
+            nbr_shifts = tmp_shifts[:, :, 0]
+            nbr_shifts = nbr_shifts[:, nbr_indices]
+            return np.ma.median(nbr_shifts, axis = 1), np.ma.std(nbr_shifts, axis = 1)
     
         #end of def###############################################################
-    
-        #changed vp 15/06/2022: mask <= 0 instead
-        # #peak values can be negative when using non-normalised cross-corr
-        # #negative values break the math here, shift to positive range
-        # #this is not...without issues...
-        # if np.min(self.cc_values) <= 0:
-        #     self.cc_values += -np.min(self.cc_values) + 1
     
         if isinstance(self.shifts, bool):
             try:
@@ -507,21 +686,22 @@ class Extracted_particles:
                     'No CC data. Use extracted_particles.read_cc_peaks()')     
     
     
-        #self.shift_mask = np.zeros(self.shifts.shape, dtype = bool)
         self.shift_mask[:, :, n_peaks:] = 0  #[ntilts, npcls, npeaks, 2]
-        # self.shift_mask = np.logical_and((self.cc_values > 0)[..., None], self.shift_mask)
-        
         self.cc_values = np.ma.masked_array(self.cc_values,
                                           mask = np.logical_not(self.shift_mask[..., 0]))
+        self.shifts = np.ma.masked_array(self.shifts,
+                                          mask = np.logical_not(self.shift_mask))
+        
+        #removes the worst scoring shifts. Not recommended.
         if self.exclude_lowest_cc_fraction:
             cc_thr = np.percentile(np.ma.compressed(self.cc_values[:, :, 0]), 
-                                   self.exclude_lowest_cc_fraction)
+                                   self.exclude_lowest_cc_fraction*100)
             tmp_mask = self.cc_values.data > cc_thr
             self.shift_mask = np.logical_and(self.shift_mask, tmp_mask[..., None])
             
-        self.shifts = np.ma.masked_array(self.shifts,
+            self.shifts = np.ma.masked_array(self.shifts,
                                           mask = np.logical_not(self.shift_mask))
-        self.cc_values = np.ma.masked_array(self.cc_values,
+            self.cc_values = np.ma.masked_array(self.cc_values,
                                           mask = np.logical_not(self.shift_mask[..., 0]))
             
 
@@ -529,19 +709,8 @@ class Extracted_particles:
                                      neighbour_distance = neighbour_distance,
                                      min_neighbours = min_neighbours)
 
+        #the point is to detect warping. global shifts are removed for analysis
         glob_med = np.ma.median(self.shifts[:, :, 0], axis = 1)
-            
-        #vp 7/7/2022 - moving this to tmp_shifts
-        # #coarse clean: remove shifts that are +/- 3x std from median
-        # self.nice_tilts(find_nearest(self.tilt_angles, 0))
-        # #nice_tilts will not work with non-normalised CC, so just using 0 deg tilt
-        # glob_std = np.ma.std(self.shifts[self.tilt_subset, :, 0], axis = (0,1))
-        # if shift_std_cutoff:
-        #     self.shifts = np.ma.masked_greater(self.shifts,
-        #                     glob_med[:, None, None] + glob_std*shift_std_cutoff)
-        #     self.shifts = np.ma.masked_less(self.shifts,
-        #                     glob_med[:, None, None] - glob_std*shift_std_cutoff)
-
         if subtract_global_shift:
             tmp_shifts = deepcopy(self.shifts) - glob_med[:, None, None]
         else:
@@ -549,23 +718,28 @@ class Extracted_particles:
             
         #coarse clean: remove shifts that are +/- 3x std from median
         self.nice_tilts(find_nearest(self.tilt_angles, 0))
-        #nice_tilts will not work with non-normalised CC, so just using 0 deg tilt
-        
+        #using 0 deg tilt as the re
         if shift_std_cutoff:
-            glob_std = np.ma.std(tmp_shifts[self.tilt_subset, :, 0], axis = (0,1))
+            glob_std = np.ma.std(tmp_shifts[self.tilt_subset, :, 0], axis = (0,1))        
             
+            if subtract_global_shift:
+                ref_shift = 0
+            else:
+                ref_shift = glob_med[:, None, None]
+                
             tmp_shifts = np.ma.masked_greater(tmp_shifts,
-                            glob_med[:, None, None] + glob_std*shift_std_cutoff)
+                        ref_shift + glob_std*shift_std_cutoff)
             tmp_shifts = np.ma.masked_less(tmp_shifts,
-                            glob_med[:, None, None] - glob_std*shift_std_cutoff)
-            
-            
+                        ref_shift - glob_std*shift_std_cutoff)           
             
                 
         for pcl_index in range(self.num_pcls):
             
-            #running this first even if use_map_medians = True, need std estimate
-            cc_dst_mean, cc_dst_std = cc_distance_weight_neighbours(
+            #cc_distance_weight
+            if use_nbr_median:
+                cc_dst_mean, cc_dst_std = get_nbr_median(pos, pcl_index, tmp_shifts)
+            else:
+                cc_dst_mean, cc_dst_std = cc_distance_weight_neighbours(
                     tmp_shifts, self.cc_values,
                     pcl_index, dst, pos, n_peaks = n_peaks,
                     cc_weight_exp = cc_weight_exp, cc_weight = True)
@@ -581,8 +755,7 @@ class Extracted_particles:
             pcl_mask = score_shifts(tmp_shifts, self.cc_values, tilt_mean,
                                 pcl_index,
                                 n_peaks = n_peaks,
-                                cc_weight_exp = cc_weight_exp,
-                                return_mask = True)
+                                cc_weight_exp = cc_weight_exp)
             
             self.shift_mask[:, pcl_index, :n_peaks] = pcl_mask[..., None]
             
@@ -591,7 +764,7 @@ class Extracted_particles:
             if not isinstance(plot_pcl_n, bool):
                 if np.isin(pcl_index, plot_pcl_n):
                     plot_weighted_pcl(self, pcl_index, tilt_mean, cc_dst_std,
-                              figsize = figsize, out_dir = True)        
+                              figsize = figsize, out_dir = True)  
 
     
     def shifts_form_median_maps(self, neighbour_distance = 10, 
@@ -599,6 +772,16 @@ class Extracted_particles:
                                 z_bias = 3,
                                 interp = 10, limit = 10,
                                 n_peaks = 2):
+        """
+        Extract shifts from median projections (of nearby particles) of cc maps.
+        Normally, only ~ 5 shifts/cc values are extracted from each map. The 
+        reasoning here is that taking the median of whole maps should produce
+        more robust results. 
+        
+        THIS IS EXTREMELY SLOW. Obv it could be paralelised but the results 
+        are not encouraging.
+
+        """
                 
         def average_cc_maps(pos, pcl_index):
             
@@ -686,8 +869,28 @@ class Extracted_particles:
 
     
     def write_fiducial_model(self, ali = False, use_local_medians = False):
+        """
+        Write selected shifts as an IMOD fiducial model.
+
+        Parameters
+        ----------
+        ali : str, optional
+            Path to tilt series. Used for imodtrans. The default is False.
+        use_local_medians : bool, optional
+            Use medians of local groups as shifts rather than the individual
+            particles. The default is False.
+
+        Returns
+        -------
+        str
+            Path to output fiducial model.
+
+        """
 
         def compress_masked_array(vals, axis=-1, fill=1000):
+            """
+            Reorder shifts so that unmasked values come first.
+            """
             #https://stackoverflow.com/questions/46354509/transfer-unmasked-elements-from-maskedarray-into-regular-array
             cnt = vals.mask.sum(axis=axis)
             shp = vals.shape
@@ -740,8 +943,21 @@ class Extracted_particles:
 
 
     def nice_tilts(self, zero_tlt = False, min_size = 5):
+        """
+        Select a subset of tilts with the lowest tilt angle/highest signal.
+
+        Parameters
+        ----------
+        zero_tlt : int or bool, optional
+            Index of the tilt with the highest signal. If False, use cccs to 
+            find the nicest tilt. The default is False.
+        min_size : int, optional
+            Minimum number of tilts. Uses this or 1/4 of the stack size, whatever
+            is larger. The default is 5.
+
+        """
         #define middle tilts based on middle tilt or median CCC
-        if zero_tlt:
+        if not isinstance(zero_tlt, bool):
             step = max(min_size, self.num_tilts//4)
             bot = int(zero_tlt - 1 - (step - 1)//2)
             #zero_tlt is numbered from 1, so take 1 off
@@ -776,9 +992,9 @@ class Extracted_particles:
                          label = 'max/min')
         ax.fill_between(xvals, q25, q75, color = 'cornflowerblue',
                          label = 'quartiles')
-        if self.exclude_worst_pcl_fraction:
+        if self.exclude_lowest_cc_fraction:
             cc_thr = np.percentile(np.ma.compressed(self.cc_values[:, :, 0]), 
-                                   self.exclude_lowest_cc_fraction)
+                                   self.exclude_lowest_cc_fraction*100)
             ax.axhline(cc_thr, label = 'min allowed ccc', c = 'r', linestyle = '--')
         ax.set_xlabel('specimen tilt [degrees]')
         ax.set_ylabel('CCC')
@@ -852,6 +1068,10 @@ class Extracted_particles:
      
         
     def split_for_processchunks(self, pcls_per_core):
+        """
+        Split sorted_pcls for parallelisation.
+
+        """
         #rearrange ssorted_pcls by groups, only operate with indices
         order = np.argsort(self.sorted_pcls[0,:,4])
         group_ordered = np.array(self.sorted_pcls[0,:,3:5][order], dtype = int)
@@ -863,9 +1083,6 @@ class Extracted_particles:
                 c_tasks[-1] = np.vstack((c_tasks[-1], tmp_task))
             else:
                 c_tasks.append(tmp_task)
-           
-            
-        #c_tasks = [group_ordered[x:x + pcls_per_core]    
-        #        for x in np.arange(self.num_pcls + 1, step = pcls_per_core)]
+          
         #so these are particle indices and group IDs
         return c_tasks  
