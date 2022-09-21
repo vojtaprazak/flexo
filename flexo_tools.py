@@ -575,7 +575,7 @@ def fid2ndarray(fiducial_model, tlt = False, defocus_file = False,
     ssorted_pcls = np.dstack((sorted_pcls,
                               np.zeros((sorted_pcls.shape[0],
                                         sorted_pcls.shape[1], 4))))
-    ssorted_pcls[:,:,3] =  list(range(sorted_pcls.shape[1]))
+    ssorted_pcls[:,:,3] =  np.arange(sorted_pcls.shape[1])
     
     
     excluded_views_mask = np.isin(np.arange(ssorted_pcls.shape[0]), np.array(excludelist) - 1, invert = True)
@@ -638,7 +638,7 @@ def make_non_overlapping_pcl_models(fiducial_model, box_size, out_dir,
     motl3d : str, optional (required with model3d)
         Path to PEET motive list.
     **kwargs
-        Takes optional arguments for fid2ndarray
+        Takes optional arguments for fid2ndarray (and get_pcl_defoci)
 
     Returns
     -------
@@ -879,357 +879,6 @@ def get_tiltrange(tiltlog):
     trange = [float(alist[0].split()[0]), float(alist[-1].split()[-1].strip())]
     return trange
 
-def prepare_prm(prm, ite, tomo, tom_n, out_dir, base_name, new_prm_dir,
-                        search_rad = False,
-                        phimax_step = False,
-                        psimax_step = False,
-                        thetamax_step = False,
-                        hicutoff = False, #expect list/tuple
-                        lowcutoff = False, #expect list/tuple
-                        refthr = False,
-                        #if init, using tomograms in prm file
-                        mod = False,
-                        motl = False,
-                        reuse_tiltrange = False
-                        ):
-    """
-    This function is inteded to prepare a set of PRM files for FSC
-    determination in order to detect change in alignment of the Flexo 
-    aligned tomogram.
-    
-    Specify either both half-data set PRM files or a single PRM file in 
-    which case this file will be split in two.
-
-    The alignment should already be pretty good.
-    Inputs:
-        prm [str] path to PEET parameter file
-        ite [int] PEET iteration (uses PEETPRMFile)
-        tomo [str, list, bool or 'init'] path to tomo(s)
-        tom_n - [int or list] numbered from 1, use 'all' to include all
-            This option is available in case there are e.g. multiple model
-            files relating to the same tomogram.
-        out_dir [str] path to output directory
-        base_name [str] desired output base name
-        st [str] path to original tilt series stack
-        new_prm_dir [str] path to desired output directory
-    Optional:
-        search_rad [int, tuple or list of 3 ints] translation search radius
-            default False
-        phimax_step [list or tuple of 2 ints] phi rotation max and step
-            default False
-        psimax_step [list or tuple of 2 ints]
-            default False
-        thetamax_step [list or tuple of 2 ints]
-            default False
-        lowcutoff [list or tuple of 2 floats]
-            default False
-        hicutoff [list or tuple of 2 floats]
-            default False
-        lowcutoff [list or tuple of 2 floats]
-            default False
-        refthr [int] number of particles to be included in the average
-            default False
-        mod = [list of str] List of mode file paths. Overwrites prm model files.
-        motl = [list of str] List of motive list paths. Overwrites prm motl.
-        reuse_tiltrange = [bool] Use tilt range from prm file rather than 
-            extracting it from tilt.com
-        
-    Returns:
-        str, new prm path
-        float, apix
-    """
-    prmdir, prmname = os.path.split(prm)
-    prm = PEETPRMFile(prm)
-    
-    motls, modfiles, init_tomos = get_mod_motl_and_tomo(join(prmdir, prmname), ite)
-    cwd = os.getcwd()
-    os.chdir(prmdir)
-            
-    reference = prm.prm_dict['reference']
-    reference = check_refpath(reference)
-    mask = prm.prm_dict['maskType']
-    if not np.isin(mask, ['none', 'sphere', 'cylinder']):
-        mask = check_refpath(mask)
-
-    # #determine binning of tomo used for peet run, used for volume naming
-    r_apix, r_size = get_apix_and_size(reference)
-    # st_apix, st_size = get_apix_and_size(st)
-    # #at what binning was the peet project actually run?
-    # peet_bin = int(np.round(r_apix/st_apix, decimals = 0))
-
-    #which tomograms/mods/csvs should be used (all stored as list of strings)
-    if isinstance(tom_n, str):
-        if tom_n == 'all':
-            tom_n = np.arange(len(modfiles))
-        else:
-            raise ValueError('prepare_prm: Unexptected tom_n value')  
-    else:
-        if isinstance(tom_n, int):
-            if tom_n == 0:
-                print(('prepare_prm: Tomograms for FSC are numbered from 1! '
-                       + 'Using tomogram no. 1'))
-                tom_n = [tom_n]
-            tom_n = [tom_n - 1]
-        elif isinstance(tom_n, np.ndarray):
-            if np.sort(tom_n)[0] == 0:
-                print(('prepare_prm: Zero found for tomogram number. '
-                       + 'Assuming entered numbering is from zero, not 1.'))
-                tom_n = np.array(tom_n)
-            else:                
-                tom_n = np.array(tom_n) - 1
-
-    if not mod:
-        mod = [modfiles[n] for n in tom_n]
-    if not motl:
-        csv = [motls[n] for n in tom_n]
-    else:
-        csv = motl
-        
-    #tilt range - stored as list of lists
-    #assuming Flexo tomogram is being used 
-    if reuse_tiltrange:
-        trange = prm.prm_dict['tiltRange']
-        trange = [trange[n] for n in tom_n]
-    else:
-        trange = get_tiltrange(join(out_dir, 'tilt.log'))
-        trange = [trange for x in tom_n]
-    
-    # if isinstance(tomo, bool):
-    #     #The point of this is to run peet on flexo tomograms, so the default:
-    #     tomo = [join(out_dir, base_name + '_bin%s.rec' % int(peet_bin))
-    #             for m in range(len(mod))]
-    if isinstance(tomo, str):
-        if tomo == 'init':
-            tomo = [init_tomos[tom_n[t]] for t in range(len(tom_n))]
-        else:
-            tomo = [tomo]
-    elif (isinstance(tomo, list) or isinstance(tomo, tuple)
-            or isinstance(tomo, (np.ndarray, np.generic))):
-        tomo = list(tomo)
-        if len(tomo) != len(tom_n):       
-            raise ValueError('prepare_prm: Number of tomogram paths does ' +
-                             'not match the number of requested tomograms.')
-            
-    if len(tomo) != len(mod):
-        raise Exception("Numbers of tomogram and models don't match %s %s" % (len(tomo), len(mod)))
-            
-    #check reference binning, bin reference/model if it's not the same as tomo
-    tomo_apix, tomo_size = get_apix_and_size(tomo[0])
-    rel_bin = np.round(tomo_apix/r_apix, decimals = 2)
-    if rel_bin != 1.:
-        print('Reference and tomogram voxel sizes are not the same (%s, %s). Adjusting reference and model files to match...' %
-              (r_apix, tomo_apix))
-        new_reference = join(out_dir, 'bin_' + split(reference)[-1])
-        check_output('squeezevol -f %s %s %s' % (rel_bin, reference, new_reference), shell = True)
-        new_apix, new_size = get_apix_and_size(new_reference)
-        if np.any(new_size%2):
-            new_size -= new_size%2
-            check_output('trimvol -nx %s -ny %s -nz %s %s %s' %
-                         (new_size[0], new_size[1], new_size[2], new_reference, new_reference), shell = True)
-                        
-        if rel_bin < 1:
-            hicutoff = [0.4*rel_bin, np.round(max(1./r_size[0], 0.03), decimals = 3)]
-        reference = new_reference
-        
-        
-        for mn in range(len(mod)):
-            mod_str = ('.').join(split(mod[mn])[1].split('.')[:-1])
-            output_model = join(new_prm_dir, mod_str + '_bin%s.mod' % rel_bin)
-            output_motl = join(new_prm_dir, mod_str + '_bin%s.csv' % rel_bin)            
-            bin_model(mod[mn], output_model, rel_bin, motl = csv[mn],
-                      out_motl = output_motl)
-            mod[mn] = output_model
-            csv[mn] = output_motl
-        
-    new_prm = prm.deepcopy()
-    new_prm.prm_dict['fnModParticle'] = mod
-    new_prm.prm_dict['initMOTL'] = csv
-    new_prm.prm_dict['fnVolume'] = tomo
-    new_prm.prm_dict['tiltRange'] = trange
-    new_prm.prm_dict['fnOutput'] = base_name
-    new_prm.prm_dict['reference'] = reference
-    new_prm.prm_dict['maskType'] = mask
-    
-    #get rid of spherical sampling if it's in the prm
-    new_prm.prm_dict['sampleSphere'] = 'none'
-    new_prm.prm_dict['sampleInterval'] = 'NaN'
-    
-    
-    if isinstance(phimax_step, bool):
-        phimax_step = 0, 1
-    if isinstance(psimax_step, bool):
-        psimax_step = 0, 1
-    if isinstance(thetamax_step, bool):
-        thetamax_step = 0, 1        
-    angrange = ['-%s:%s:%s' % (phimax_step[0], phimax_step[1], phimax_step[0]),
-                '-%s:%s:%s' % (psimax_step[0], psimax_step[1], psimax_step[0]),
-                '-%s:%s:%s' % (thetamax_step[0],
-                               thetamax_step[1], thetamax_step[0])]
-    
-    new_prm.prm_dict['dPhi'] = [str(angrange[0])]
-    new_prm.prm_dict['dPsi'] = [str(angrange[1])]
-    new_prm.prm_dict['dTheta'] = [str(angrange[2])]
-           
-        
-    if isinstance(hicutoff, bool):    
-        hicutoff = [0.45, np.round(max(1./r_size[0], 0.03), decimals = 3)]
-    #list of lists
-    try:
-        new_prm.prm_dict['hiCutoff'] = [list(hicutoff)]
-    except:
-        raise ValueError ('prepare_prm: Unexpected hicutoff value')
-
-    if isinstance(lowcutoff, bool):
-        #Reduce to a single entry in case there were multiple iterations
-        if len(new_prm.prm_dict['lowCutoff']) != 1:
-            new_prm.prm_dict['lowCutoff'] = [
-                                        new_prm.prm_dict['lowCutoff'][0]]
-    else:
-        if isinstance(lowcutoff, int):
-            new_prm.prm_dict['lowCutoff'] = [0,0.05]
-        else:
-            raise ValueError('prepare_prm: Unexpected lowcutoff value.')
-            #new_prm.prm_dict['lowCutoff'] = lowcutoff
-    
-    if isinstance(search_rad, (bool, type(None))):
-        #default False to make it easier to work with defaults in higher order
-        #functions
-        #search_rad = [0, 0, 0]
-        #it makes no sense for the default to be 0. If someone forgets to
-        #set the search rad (like me) then the FSC output will be wrong
-        search_rad = [r_size[0]/4]
-    elif isinstance(search_rad, int):
-        search_rad = [search_rad]
-#    if len(search_rad) == 1:
-#        search_rad = [search_rad, search_rad, search_rad]
-    new_prm.prm_dict['searchRadius'] = ' {%s}' % search_rad
-    
-    if isinstance(refthr, bool):
-        #Reduce to a single entry in case there were multiple iterations
-        if len(new_prm.prm_dict['refThreshold']) != 1:
-            new_prm.prm_dict['refThreshold'] = [
-                                        new_prm.prm_dict['refThreshold'][0]]
-    else:
-        if isinstance(refthr, int):
-            new_prm.prm_dict['refThreshold'] = [refthr]
-        else:
-            raise ValueError('prepare_prm: Unexpected refthr value.')
-        
-    #nParticles required for calcUnbiasedFSC
-    #get number of particles by reading particle indices from last lines of 
-    #csv files and adding them together
-    num_p = 0
-    for x in tom_n:
-        num_p += int(check_output(['tail', '-1', '%s' % csv[x]]).decode().split(',')[3])
-    new_prm.prm_dict['nParticles'] = num_p
-    new_prmpath = join(new_prm_dir, base_name + '.prm') 
-    new_prm.write_prm_file(new_prmpath)
-            
-    os.chdir(cwd)
-    return new_prmpath, r_apix    
-
-def get_fsc(vol1, vol2, out_dir, step=0.01):
-    """
-    Basic FSC.
-
-    Parameters
-    ----------
-    vol1 : str
-        Path to halfmap1.
-    vol2 : str
-        Path to halfmap1.
-    out_dir : str
-        Output directory.
-    step : float, optional
-        Step size. The default is 0.001.
-
-    """
-    if isinstance(vol1, str):
-        vol1 = mrcfile.open(vol1).data
-    if isinstance(vol2, str):
-        vol2 = mrcfile.open(vol2).data
-    
-    FTvol1 = fft.fftshift(fft.fftn(vol1))
-    FTvol2 = fft.fftshift(fft.fftn(vol2))
-    
-    cc = np.real(FTvol1*FTvol2.conj())/(np.abs(FTvol1)*np.abs(FTvol2))
-    x = fft.fftshift(fft.fftfreq(vol1.shape[2], 1))
-    y = fft.fftshift(fft.fftfreq(vol1.shape[1], 1))
-    z = fft.fftshift(fft.fftfreq(vol1.shape[0], 1))
-    xx, yy, zz = np.meshgrid(z, y, x, sparse = True, indexing = 'ij')
-    R = np.sqrt(xx**2+yy**2+zz**2)
-
-    # calculate the mean
-    f = lambda r : cc[(R >= r-step/2) & (R < r+step/2)].mean()
-    r  = np.linspace(0,x[-1], num=round((1/(2))//(step*2)))
-    mean = np.vectorize(f)(r) #I want this in the same format as calcUnbiasedFSC
-    
-    m = np.logical_and(np.logical_not(np.isnan(mean)), r > 0)
-    r = r[m]
-    mean = mean[m]
-    
-    with open(join(out_dir, 'arrFSCC.txt'), 'w') as g:
-        g.write(('\n').join(list(np.array(mean, dtype = str))))
-        
-    with open(join(out_dir, 'freqShells.txt'), 'w') as g:
-        g.write(('\n').join(list(np.array(r, dtype = str))))
-    
-   # return mean, r, R, FTvol1, FTvol2, cc
-
-def peet_halfmaps(peet_dir, prm1, prm2, machines, use_davens_fsc = True):
-    """
-    Run PEET with half datasets, 
-
-    Parameters
-    ----------
-    peet_dir : str
-        Path to peet directory, i.e. where halfmap directories will be.
-    prm1 : str
-        Path to half dataset prm 1.
-    prm2 : str
-        Path to half dataset prm 1.
-    machines : list
-        Machines for parallelisation, see run_split_peet.
-
-    """
-    
-    #fsc dirs - list, directories containing freShells or w/e
-    
-    cwd = os.getcwd()
-    fsc1d, prm_base1 = split(prm1)
-    fsc2d, prm_base2 = split(prm2)
-    prm_base1 = prm_base1[:-4]
-    prm_base2 = prm_base2[:-4]
-
-    os.chdir(fsc1d)
-    run_generic_process(['prmParser', prm_base1 + '.prm'], 
-                        join(fsc1d, 'parser.log'))
-    #check_output('prmParser %s' % prm_base1, shell = True)
-    if not isfile(prm_base1 + '-001.com'): 
-        raise Exception('prmParser failed to generate com files. %s' % prm1)
-    os.chdir(fsc2d)
-    run_generic_process(['prmParser', prm_base2 + '.prm'], 
-                        join(fsc2d, 'parser.log'))  
-    if not isfile(prm_base2 + '-001.com'):
-        raise Exception('prmParser failed to generate com files. %s' % prm2)
-    
-    run_split_peet(prm_base1, fsc1d, prm_base2, fsc2d, machines)
-    #calcUnbiasedFSC
-    os.chdir(peet_dir)
-    
-    
-    if use_davens_fsc:
-        vol1 = glob.glob(fsc1d + '/unMasked*.mrc')
-        vol1 = sorted(vol1, key=lambda x: int(x.split('_')[-1].split('.')[0].strip('Ref')))[-1]
-        vol2 = glob.glob(fsc2d + '/unMasked*.mrc')
-        vol2 = sorted(vol2, key=lambda x: int(x.split('_')[-1].split('.')[0].strip('Ref')))[-1]        
-        get_fsc(vol1, vol2, peet_dir)
-    else:
-        fsc_log = join(peet_dir, 'calcUnbiasedFSC.log')
-        print('Running calcUnbiasedFSC...')
-        run_generic_process(['calcUnbiasedFSC', prm1, prm2], out_log = fsc_log)
-
-    os.chdir(cwd)
 
 def optimal_lowpass(y):
     """
@@ -1802,101 +1451,6 @@ def get_peaks(cc_map, n_peaks = 100, return_blank = False):
     #mask in numerical form
     out_peaks[..., 3] = m
     return out_peaks
-
-def combine_fsc_halves(prm1, prm2, tom_n, out_dir, ite,
-                        combine_all = False):
-    """
-    combines model files and motive lists split for fsc
-    tom_n [int] numbered from one
-    combine_all [bool] combine and return paths for all MOTLs and all mods
-    """
-
-    if not isdir(out_dir):
-        os.makedirs(out_dir)
-    
-    motls1, modfiles1, init_tomos = get_mod_motl_and_tomo(prm1, ite)
-    motls2, modfiles2, init_tomos = get_mod_motl_and_tomo(prm2, ite)
-    
-    prm = PEETPRMFile(prm1)
-    base_name = prm.prm_dict['fnOutput']
-
-    new_mods = []
-    new_motls = []
-    if combine_all:
-        tom_numbers = np.arange(len(modfiles1))
-    else:
-        tom_numbers = np.arange(tom_n -1, tom_n)
-    for x in tom_numbers:
-        outmod = join(out_dir, base_name + '_Tom%s_combined.mod' % str(x + 1))
-        outcsv = join(out_dir, base_name + '_Tom%s_combined.csv' % str(x + 1))
-        new_mods.append(outmod)
-        new_motls.append(outcsv)
-
-        #read in csv halves and interleave
-        csv1 = PEETMotiveList(motls1[x])
-        csv2 = PEETMotiveList(motls2[x])
-        
-        new_arr = np.zeros((len(csv1) + len(csv2), 20))
-        if len(csv1) != len(csv2):
-            #in case the two MOTLs are not the same lenght
-            #place the remainder of the longer MOTL at the end
-            shorter = min(len(csv1), len(csv2))
-            if len(csv1) < len(csv2):
-                remainder = csv2[len(csv1):]
-            else:
-                remainder = csv1[len(csv2):]
-            new_arr[:shorter*2][::2] = csv1[:shorter]
-            new_arr[:shorter*2][1::2] = csv2[:shorter]
-            new_arr[shorter*2:] = remainder
-        else:
-            new_arr[::2] = csv1
-            new_arr[1::2] = csv2
-
-        #zero offsets
-        new_arr[:, 10:13] = 0.
-        
-        #add to csv and renumber
-        new_csv = PEETMotiveList()
-        for y in range(len(new_arr)):
-            new_csv.add_pcle(new_arr[y])
-        new_csv.renumber()
-        new_csv.write_PEET_motive_list(outcsv)
-    
-        #combine models
-        mod1 = PEETmodel(modfiles1[x]).get_all_points()
-        mod2 = PEETmodel(modfiles2[x]).get_all_points()
-        mod1 += csv1.get_all_offsets()
-        mod2 += csv2.get_all_offsets()
-        
-        new_arr = np.zeros((len(mod1) + len(mod2), 3))
-        if len(mod1) != len(mod2):
-            #in case the two models are not the same lenght
-            #place the remainder of the longer model at the end
-            shorter = min(len(mod1), len(mod2))
-            if len(mod1) < len(mod2):
-                remainder = mod2[len(mod1):]
-            else:
-                remainder = mod1[len(mod2):]
-            new_arr[:shorter*2][::2] = mod1[:shorter]
-            new_arr[:shorter*2][1::2] = mod2[:shorter]
-            new_arr[shorter*2:] = remainder
-        else:
-            new_arr[::2] = mod1
-            new_arr[1::2] = mod2   
-            
-        new_mod = PEETmodel()
-        for y in range(len(new_arr)):    
-            new_mod.add_point(0, 0, new_arr[y])
-        new_mod.write_model(outmod)
-    
-    if combine_all:
-        #return new_mods[tom_n - 1], new_motls[tom_n - 1]
-        #not sure why was I returning the equivalent of combine_all = False here
-        
-        return new_mods, new_motls
-    else:
-        return [new_mods[0]], [new_motls[0]]
-    
     
     
     
@@ -2007,114 +1561,6 @@ def get_resolution(fsc, fshells, cutoff, apix = False, fudge_ctf = True,
     if apix:
         res[1] = np.round(apix/res[0], decimals = 1)
     return res
-    
-def plot_fsc(peet_dirs, out_dir, cutoff = 0.143, apix = False,
-             fshells = False, fsc = False, simpleFSC = False):  
-    """
-    Expecting output from PEET calcUnbiasedFSC or simpleFSC
-
-    Parameters
-    ----------
-    peet_dirs : list
-        List of directories containing FSC files..
-    out_dir : str
-        Where to write the plot.
-    cutoff : float, optional
-        Cutoff. The default is 0.143.
-    apix : float, optional
-        Pixel size. The default is False.
-    fshells : list, optional
-        Specify freqShells.txt directly. The default is False.
-    fsc : list, optional
-        Specify arrFSCC.txt directly. The default is False.
-    simpleFSC : bool, optional
-        Look for simpleFSC output instead of calcUnbiasedFSC. The default is False.
-
-    Returns
-    -------
-    float
-        Resolution or area under FSC.
-
-    """
-    apix = float(apix)
-    
-    fig, axs = plt.subplots(1, 1, figsize = (7, 7))
-    axs.axhline(0, color = 'black', lw = 1)
-    axs.axhline(cutoff, color = 'grey', lw = 1, linestyle='dashed')
-    axs.set(xlabel = 'Fraction of sampling frequency')
-    axs.set(ylabel = 'Fourier Shell Correlation')
-    res = []
-    get_area = 'cutoff' 
-    #this is set to the cutoff of the first fsc
-    #the reasoning is that the cutoff is potentially unreliable
-    
-    if isinstance(peet_dirs, str):
-        peet_dirs = [peet_dirs]
-        
-    if simpleFSC:
-        fsc = [join(peet_dirs[x], 'simpleFSC.csv')
-                    for x in range(len(peet_dirs))]
-    else:
-        if isinstance(fshells, bool):
-            fshells = [join(peet_dirs[x], 'freqShells.txt')
-                        for x in range(len(peet_dirs))]
-        if isinstance(fsc, bool):
-            fsc = [join(peet_dirs[x], 'arrFSCC.txt')
-                    for x in range(len(peet_dirs))]
-
-    for x in range(len(peet_dirs)):
-        if simpleFSC:
-            with open(fsc[x], 'r') as f:
-                t = np.array([ff.split(',') for ff in f.read().strip('\n').split()], dtype = float)  
-                ar_fshells = np.linspace(0,0.5,t.shape[0] + 1)[1:]
-                #ar_fshells = t[:, 0]
-                ar_fsc = t[:, 1]
-        else:
-            with open(fshells[x], 'r') as f:
-                ar_fshells = np.array(f.read().strip('\n\r').split(), dtype = float)
-            with open(fsc[x], 'r') as f:
-                ar_fsc = np.array(f.read().strip('\n\r').split())
-                if ar_fsc[ar_fsc != 'NaN'].size == 0:
-                    warnings.warn('FSC determination failed.')
-                    return False
-                else:
-                    ar_fsc = np.array(ar_fsc, dtype = float)
-        axs.plot(ar_fshells, ar_fsc, label = x + 1)
-        c_res = get_resolution(ar_fsc, ar_fshells, cutoff = cutoff,
-                               apix = apix, get_area = get_area)
-        get_area = int(c_res[3])
-        res.append(c_res)
-        
-    res = np.array(res)
-    axs.legend(loc = 'upper right')
-    axs.set_ylim(None, top = 1)
-    if apix:
-        #also plot resolution values
-        axR = axs.twiny()
-        axR.set_xlim(axs.get_xlim())    
-        top_xticks = axs.get_xticks()
-        allowed_mask = top_xticks > 0
-        zero_mask = top_xticks == 0
-        disallowed_mask = top_xticks < 0     
-        top_xticks[allowed_mask] = apix/top_xticks[allowed_mask]
-        top_xticks[zero_mask] = 'inf'
-        top_xticks[disallowed_mask] = None       
-        for x in range(len(top_xticks)):
-            if isinstance(top_xticks[x], float):
-                top_xticks[x] = np.format_float_positional(
-                                            top_xticks[x], precision = 2)
-        axR.set_xticklabels(top_xticks)
-        axR.set(xlabel = 'Resolution [Å]')
-    if apix:
-        fig.suptitle('Current iteration resolution at %s FSC: %s' %
-                     (cutoff, res[-1, 1]))
-    out_fig = join(out_dir, 'fsc_plot.png')
-    if os.path.isfile(out_fig):
-        os.rename(out_fig, out_fig + '~')
-    plt.savefig(out_fig)
-    plt.close()
-    return res
-#    plt.setp(axes, xticks = arf)
 
 def check_tmpfs(chunk_id, vols, tmpfsdir = '/dev/shm'):
     """Evaluate (return bool) whether a chunk will have enough space to
@@ -2356,6 +1802,7 @@ def replace_pcles(average_map, tomo_size, csv_file, mod_file, outfile, apix,
     offsets = motl.get_all_offsets()
     if np.max(offsets) != 0.:
         warnings.warn('Motive list contains non-zero offsets. These WILL NOT be added to particle positions.')
+        #note offsets are off because I add offsets at an earlier point
     offsets *= 0
     
     border = int(xsize//2)
@@ -2998,7 +2445,7 @@ def kill_process(process, log = False, wait = 10, sig = signal.SIGTERM):
         
 def check_ssh(hostname):
     process = Popen(['ssh', '-q', hostname, 'exit'])
-    #com = process.communicate()
+    process.communicate()
     poll = process.poll()
     #print (poll)
     if poll == 0:
@@ -3068,6 +2515,63 @@ def run_generic_process(cmd, out_log = False, wait = True):
             com = process.communicate()
             write_to_log(out_log, com[0].decode() + '\n' + com[1].decode())
         raise
+        
+def run_processchunks(base_name, out_dir, machines, log = False):   
+    """
+    Run com script(s) using processchunks
+    Inputs:
+        base_name [str] base name of com files 
+        out_dir [str] path to directory containing com files
+        machines [list of str] machine names for running, e.g. ['citra']*2
+    Optional:
+       logs [tuple of strings] names of output log files.  
+           Default (False, False)
+    """ 
+    pwd = os.getcwd()
+    os.chdir(out_dir)
+    
+    if not isinstance(machines, list):
+        machines = [machines]
+    try:
+        cmd = ['/bin/sh', 'processchunks', '-g', '-n', '18', '-P', 
+               (',').join(machines), base_name]
+        process = Popen(cmd, stdout = PIPE, stderr = PIPE,
+                        preexec_fn=os.setsid)
+        if not log:
+            c_log = join(out_dir, 'processchunks.out')
+        else:
+            c_log = realpath(log)
+        if isfile(c_log):
+            os.rename(c_log, c_log + '~')
+        write_to_log(c_log, out_dir + '\n' + (' ').join(cmd) + '\n')
+
+        total_chunks, chunks_done = 0, 0
+        for line in iter(process.stdout.readline, ''.encode()):
+            if line:
+                #everything is in bytes except for None? confused?
+                line = line.decode()
+            # if line == '':
+            #     break
+            # else:
+            write_to_log(c_log, line.strip())
+            if line.split()[3:6] == ['DONE', 'SO', 'FAR']:
+                total_chunks = int(line.split()[2])
+                chunks_done = int(line.split()[0])
+                progress_bar(total_chunks, chunks_done)
+        com = process.communicate()
+        write_to_log(c_log, com[0].decode() + '\n' + com[1].decode())
+        if process.poll() != 0:
+            raise ValueError(('run_processchunks: Process' +
+                            ' returned non-zero status.  See %s') % c_log)
+    except ValueError:
+        raise
+    except:
+        kill_process(process, log = c_log)
+        raise
+    else:
+        if total_chunks != chunks_done or chunks_done == 0:        
+            raise Exception('Processchunks did not run to completion.') 
+    os.chdir(pwd)
 
 def imodscript(comfile, abspath):
     """Executes IMOD comfile but ignores "sys.exit" that's executed after successful completion.
@@ -3096,141 +2600,35 @@ def imodscript(comfile, abspath):
     os.chdir(pwd)
     sys.path.pop(-1) #removes last path entry
     
-def run_split_peet(base_name, out_dir, base_name2, out_dir2, machines,
-                   logs = (False, False)):   
+def get_binned_size(img_shape, binning):
     """
-    Run 2 sets of com scripts in parallel using processchunks.
-    Inputs:
-        base_name [str] base name of com files 
-        out_dir [str] path to directory containing com files
-        base_name2 [str] base name of com files 
-        out_dir2 [str] path to directory containing com files
-        machines [list of str] machine names for running, e.g. ['citra']*2
-    Optional:
-       logs [tuple of strings] names of output log files.  
-           Default (False, False)
-    """   
-    pwd = os.getcwd()
-    if not isinstance(machines, list):
-        machines = [machines]
-    if len(machines) < 2:
-        print(('run_split_peet: Warning: Only one machine specified. '+
-               'Both processchunks will be sent to the same core.'))
-        m1 = m2 = machines
-    else:
-        m1 = machines[:len(machines)//2]
-        m2 = machines[len(machines)//2:]
-    if not all(logs):
-        c_log1 = join(out_dir, 'processchunks.out')
-        c_log2 = join(out_dir2, 'processchunks.out')
-    else:
-        c_log1, c_log2 = realpath(logs[0]), realpath(logs[1])
-    if isfile(c_log1):
-        os.rename(c_log1, c_log1 + '~')
-    if isfile(c_log2):
-        os.rename(c_log2, c_log2 + '~')
-    try:
-        processchunks_terminated = 0
-        #process 1
-        os.chdir(out_dir)  
-        cmd = ['/bin/sh', 'processchunks', '-g', '-n', '18', '-P', 
-               (',').join(m1), base_name]
-                    #%s %s'
-                     #%((',').join(m1), base_name))
-        process = Popen(cmd, stdout = PIPE, stderr = PIPE, 
-                        preexec_fn=os.setsid)
-        write_to_log(c_log1, out_dir + '\n' + (' ').join(cmd) + '\n')
-        #process2
-        os.chdir(out_dir2)  
-        cmd2 = ['/bin/sh', 'processchunks', '-g', '-n', '18', '-P', 
-               (',').join(m2), base_name2]
-                     #%((',').join(m2), base_name2))
-        process2 = Popen(cmd2, stdout = PIPE, stderr = PIPE,
-                         preexec_fn=os.setsid)
-        write_to_log(c_log2, out_dir + '\n' + (' ').join(cmd2) + '\n')
-          
-        total_chunks1, total_chunks2 = 0, 0
-        chunks_done1, chunks_done2 = 0, 0
-        for output1, output2 in zip_longest(
-                        iter(process.stdout.readline, ''.encode()),
-                        iter(process2.stdout.readline, ''.encode())):
-            advance_bar = False
+    Return binned image/volume size matching what IMOD would produce.
+    From Robert Stass.
 
-            if output1 != None:
-                output1 = output1.decode()
-                write_to_log(c_log1, output1.strip())
-                if output1.split()[3:6] == ['DONE', 'SO', 'FAR']:
-                    total_chunks1 = max(int(output1.split()[2]), total_chunks1)
-                    chunks_done1 = max(int(output1.split()[0]), chunks_done1)
-                    advance_bar = True
-                elif output1.split()[:2] == ['ALL', 'DONE']:
-                    total_chunks1 = chunks_done2 = total_chunks1
-                    advance_bar = True                    
-            if output2 != None:
-                output2 = output2.decode()
-                write_to_log(c_log2, output2.strip())
-                if output2.split()[3:6] == ['DONE', 'SO', 'FAR']:
-                    total_chunks2 = max(int(output2.split()[2]), total_chunks2)
-                    chunks_done2 = max(int(output2.split()[0]), chunks_done2)
-                    advance_bar = True
-                elif output2.split()[:2] == ['ALL', 'DONE']:
-                    total_chunks2 = chunks_done2 = total_chunks2
-                    advance_bar = True                    
-            if advance_bar:
-                total_chunks = total_chunks1 + total_chunks2
-                chunks_done = chunks_done1 + chunks_done2
-                progress_bar(total_chunks, chunks_done)   
-            panic_msg = (('').join(['#']*30) + '\n' +
-                         'SOMETHING HAS GONE WRONG, DUMPING STDERR, STDOUT:\n')
+    Parameters
+    ----------
+    img_shape : list
+        Image dimensions.
+    binning : float
+        Binning.
 
-            if process.poll() != None and output1 == None:
-                #poll stil returns integer, not bytes in python3
-                #have to check if there is still output in the PIPE because
-                #of race condition with process.poll()
-                #some processchunks errors return 0 status:
-                #when done, check return status but also if chunks are done
-                if (process.poll() != 0
-                or (process.poll() == 0 and chunks_done1 < total_chunks1)
-                or (process.poll() == 0 and chunks_done1 == 0)):                    
-                    com = [m.decode() for m in process.communicate()]
-                    write_to_log(c_log1, 
-                                 'Processchunks status %s' % process.poll())
-                    write_to_log(c_log1, panic_msg)
-                    write_to_log(c_log1, com[0] + '\n' + com[1])
-                    if process2.poll() == None: 
-                        kill_process(process2, log = c_log2)
-                    processchunks_terminated = 1
-                    raise ValueError('Processchunks returned non-zero status.')
-            if process2.poll() != None and output2 == None:
-                if (process2.poll() != 0
-                or (process2.poll() == 0 and chunks_done2 < total_chunks2)
-                #somehow I've managed to get chunks_done2 > total_chunks2?
-                or (process2.poll() == 0 and chunks_done2 == 0)):                    
-                    com = [m.decode() for m in process2.communicate()]
-                    print('#############%s' % str(com))                
-                    write_to_log(c_log2, 
-                                 'Processchunks status %s' % process2.poll())
-                    write_to_log(c_log2, panic_msg)
-                    write_to_log(c_log2, com[0] + '\n' + com[1])                    
-                    if process.poll() == None:
-                        kill_process(process, log = c_log1)
-                    processchunks_terminated = 1
-                    raise ValueError('Processchunks returned non-zero status.')
-    except ValueError:
-        if processchunks_terminated == 1:
-            raise
+    """
+    binned_shape = []
+    offsets = []
+    for dim in img_shape:
+        dim_bin = int(float(dim)/float(binning))
+        rem = dim-(binning*dim_bin)
+        if dim % 2 == dim_bin % 2:
+            if rem > 1:
+                dim_bin = dim_bin+2
         else:
-            kill_process(process, log = c_log1)
-            kill_process(process2, log = c_log2)
-            raise
-    except KeyboardInterrupt:
-        kill_process(process, log = c_log1)
-        kill_process(process2, log = c_log2)        
-        raise
-    except:
-        print('run_split_peet: Unhandled Exception.')
-        kill_process(process, log = c_log1)
-        kill_process(process2, log = c_log2)    
-        raise
-    else:
-        os.chdir(pwd)
+            dim_bin=dim_bin+1
+            rem=rem+binning
+        if rem > 1:
+            offset = -(binning-(rem/2.))
+        else:
+            offset = 0
+        binned_shape.append(dim_bin)
+        offsets.append(offset)
+    return tuple(binned_shape), tuple(offsets)  
+    
