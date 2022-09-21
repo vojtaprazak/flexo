@@ -21,7 +21,7 @@ from skimage.filters import threshold_yen, threshold_isodata
 from scipy.ndimage.morphology import grey_dilation, grey_erosion
 from scipy.ndimage import convolve
 
-from definite_functions_for_flexo import run_generic_process, imodscript, corrsearch
+from flexo_tools import run_generic_process, imodscript, corrsearch
 from IMOD_comfile import IMOD_comfile
 
 def replace_pcles(average_map, tomo_size, csv_file, mod_file, outfile, apix,
