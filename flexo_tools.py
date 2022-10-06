@@ -9,7 +9,6 @@ import sys
 import signal
 import datetime
 from copy import deepcopy
-from itertools import zip_longest
 from os.path import isfile, join, realpath, split, isdir
 import glob
 import numpy as np
@@ -28,13 +27,10 @@ from scipy.fftpack import fftn, ifftn, fftshift, ifftshift
 from numpy.fft import fftfreq
 from scipy.signal import butter, freqs, find_peaks
 from scipy.interpolate import interp1d
-from scipy.ndimage.interpolation import zoom, shift, rotate
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage.interpolation import zoom, shift
 from scipy.interpolate import RectBivariateSpline#,interp1d
 from scipy.signal import convolve2d
 from skimage.feature import peak_local_max
-#from transformations import euler_from_matrix
-
 import MapParser_f32_new
 from EMMap_noheadoverwrite import Map
 from skimage.filters import threshold_yen, threshold_isodata
@@ -48,7 +44,8 @@ def norm(x):
 
 def machines_from_imod_calib():
     """
-    Get list of machines for paralelisation from IMOD_CALIB_DIR cpu.adoc.
+    Get list of machines for paralelisation from shell variable IMOD_CALIB_DIR
+    pointing to cpu.adoc.
 
     Returns
     -------
@@ -274,6 +271,8 @@ def make_lamella_mask(surface_model, tomo_size = False, out_mask = False, plot =
               rotx = True, tomo_path = False, filter_mask = True):
     """
     Generate a slab binary mask from coordinates arranged on two surfaces.
+    
+    Works but could be made to require far fewer inputs.
 
     Parameters
     ----------
@@ -563,7 +562,6 @@ def fid2ndarray(fiducial_model, tlt = False, defocus_file = False,
 
     #fiducial model to numpy array        
     rawmod = PEETmodel(fiducial_model).get_all_points()
-    #rawmod[:, 2] = np.array(np.round(rawmod[:, 2], decimals = 0), dtype = int)
     tilt_numbers = np.unique(rawmod[:, 2])
     
     sorted_pcls = []
@@ -577,23 +575,8 @@ def fid2ndarray(fiducial_model, tlt = False, defocus_file = False,
                                         sorted_pcls.shape[1], 4))))
     ssorted_pcls[:,:,3] =  np.arange(sorted_pcls.shape[1])
     
-    
     excluded_views_mask = np.isin(np.arange(ssorted_pcls.shape[0]), np.array(excludelist) - 1, invert = True)
-    # excluded_views_mask = np.ones(ssorted_pcls.shape[0], dtype = bool)
-    # #remove excluded views. This could also be done using excludelist from tilt.com....but I prefer this??? maybe?
-    # #I've seen excluded view coordinates being given either a really small coordinate value
-    # #or insanely large (positive or negative) or "-0"  or "5.21" X coord and Z coord or...seemingly at random?
-    # for x in range(ssorted_pcls.shape[0]):
-    #     if np.allclose(0, np.mean(ssorted_pcls[x, :, :2], axis = 1), atol=1e-4):
-    #         excluded_views_mask[x] = False
-    #         print('excluded', x)
-    #     elif np.absolute(ssorted_pcls[x, 0, 2]) > len(tilt_numbers) + 100:
-    #         excluded_views_mask[x] = False
-    #         print('excluded large', x)
-    #     elif np.all(ssorted_pcls[x, 0, 0] == ssorted_pcls[x, 0, 2]):
-    #         excluded_views_mask[x] = False
-    #         print('excluded same', x)
-            
+
     ssorted_pcls = ssorted_pcls[excluded_views_mask]
             
     if tlt:
@@ -606,7 +589,6 @@ def fid2ndarray(fiducial_model, tlt = False, defocus_file = False,
         if not tlt:
             raise Exception('Tilt angle file (tlt) is required to set particle defoci.')
         defoci = get_pcl_defoci(ssorted_pcls, defocus_file, ali, **kwargs)
-        #defoci = defoci[excluded_views_mask]
         ssorted_pcls[:, :, 6] = defoci
 
     return ssorted_pcls
@@ -891,7 +873,7 @@ def optimal_lowpass(y):
 
 def optimal_lowpass_list(order = False,
               mdoc = False, flux = False, tilt_dose = False,
-              pre_exposure = 0, tlt = False, orderfile_type = None):
+              pre_exposure = 0, tlt = False, orderfile_type = 'old_relion'):
     """
     Return optimal resolution to dosefilter a tilt series. Requires 
     1) SerialEM mdoc file 
@@ -1017,7 +999,7 @@ def optimal_lowpass_list(order = False,
 
 def butterworth_filter(cutoff, box_size, apix, order = 4,
                        t = 'low', analog=True):
-    """Author: Daven
+    """Author: Daven Vasishtan
     Generates butter curve. Uses scipy.signal.butter"""
     if type(cutoff) ==list:
         cutoff = [1./x for x in cutoff]
@@ -1031,6 +1013,21 @@ def butterworth_filter(cutoff, box_size, apix, order = 4,
     return f(d)
 
 def dist_from_centre_map(box_size, apix): 
+    """
+    Generates an empty frequency array
+
+    Parameters
+    ----------
+    box_size : int
+        Size of square array dim.
+    apix : float
+        Pixel size.
+
+    Returns
+    -------
+    ndarray
+
+    """
     #author: Daven Vasishtan
     #while it may seem possible to do this with sqrt of meshgrid**2, the
     #latter produces an asymmetric array 
@@ -1086,10 +1083,6 @@ def ctf_convolve_andor_butter(inp, apix, V = 300000.0, Cs = 27000000.0,
     (Nx, Ny) = inp.shape
     CTF = 1
     if defocus and not no_ctf_convolution:
-        # Dx = np.float64(1)/np.float64(Nx*apix)
-        # Dy = np.float64(1)/np.float64(Ny*apix)
-        # x = np.arange(-Dx * Nx/2, Dx * Nx/2, Dx, dtype = 'float32') 
-        # y = np.arange(-Dy * Ny/2, Dy * Ny/2, Dy, dtype = 'float32')
         x = fft.fftshift(fft.fftfreq(Nx, apix))
         y = fft.fftshift(fft.fftfreq(Ny, apix))
         xx, yy = np.meshgrid(x, y, sparse = True, indexing = 'ij')
@@ -1299,7 +1292,7 @@ def extract_2d(stack, sorted_pcls, box_size,
 def ncc(target, probe, max_dist, interp = 1, outfile = False,
         subpixel = 'full_spline', ccnorm = 'none'):
     """
-    Cross correlation map between two images. Same size.
+    Cross correlation map between two images with the same size.
 
     Parameters
     ----------
@@ -1339,10 +1332,6 @@ def ncc(target, probe, max_dist, interp = 1, outfile = False,
     
     if np.std(target) == 0 or np.std(probe) == 0:
         raise ValueError('ncc: Cannot normalise blank images')    
-    # if max_dist > min(target.shape)//2 - 1:
-    #     max_dist = min(target.shape)//2 - 1
-#    if interp > 1:
-#        target, probe = zoom(target, interp), zoom(probe, interp)
     #norm  
     target = (target - np.mean(target))/(np.std(target))
     probe = (probe - np.mean(probe))/(np.std(probe))
@@ -1421,7 +1410,6 @@ def get_peaks(cc_map, n_peaks = 100, return_blank = False):
                 [:,3] mask value, i.e. is this a valid shift
     """
     out_peaks = np.zeros((n_peaks, 4), dtype = float)
-    #out_peaks[:,2] = 0
     if return_blank:
         return out_peaks
 
@@ -1527,10 +1515,6 @@ def get_resolution(fsc, fshells, cutoff, apix = False, fudge_ctf = True,
     search_shells = search_shells[grad_mask]
     
     res = find_nearest(search_fsc, cutoff)
-    #    if len(res) > 1:
-#        #this was meant to do the same as only taking negative slope
-#        #but still useful?
-#        res = res[0]
     if res.size > 1:
         raise ValueError('get_res: multiple values where fsc == cutoff. %s'
                          % res)
@@ -1550,12 +1534,7 @@ def get_resolution(fsc, fshells, cutoff, apix = False, fudge_ctf = True,
                               len(search_shells)*10)
     new_fsc = i(new_fshells)
     res = new_fshells[find_nearest(new_fsc, 0.143)]
-    
-#    res = search_fsc[res]
-#    #need to get the fsc value here to be able to find its index in the 
-#    #whole FSC list not just search_fsc
-#    res = np.where(fsc == res)[0]
-    #res: (sampling frequency, resolution, area under FSC, last bing for area)
+
     res = np.array((res, 0, area, cutoff_idx), dtype = float)    
     res = np.round(res, decimals = 3)
     if apix:
@@ -1571,10 +1550,6 @@ def check_tmpfs(chunk_id, vols, tmpfsdir = '/dev/shm'):
     chunk_id [int] unique chunk identifier
     vols [int] required space in bytes
     """            
-    #import psutil
-    #import os
-    #import glob
-    #import numpy as np
                 
     if not os.path.isdir(tmpfsdir):
         os.makedirs(tmpfsdir)
@@ -1602,146 +1577,15 @@ def check_tmpfs(chunk_id, vols, tmpfsdir = '/dev/shm'):
         avail = True
     return avail
 
-# def peet_to_clonemodel(mod, csv, outcsv, add_offsets = True):
-    
-#     motl = PEETMotiveList(csv)
-#     mod = PEETmodel(mod).get_all_points()
-#     offsets = motl.get_all_offsets()
-#     if add_offsets:
-#         mod += offsets
-        
-#     mat = motl.angles_to_rot_matrix()
-#     xyz = [np.degrees(euler_from_matrix(mat[m], 'szyx')) for m in range(len(mat))]
-#     xyz = np.flip(xyz, axis = 1)
-    
-    
-#     with open(outcsv, 'w') as f:
-#         for p in range(len(mod)):
-#             f.write('X, Y, Z pixel coordinates, X, Y, Z slicer angles, ccc\n')
-#             f.write('%s,%s,%s,%s,%s,%s,0\n' % (
-#                 mod[p, 0], mod[p, 1], mod[p, 2],
-#                 xyz[p, 0], xyz[p, 1], xyz[p, 2],
-#                 ))
-    
-#def subtract_surroundings(full_tomo, mask, ali, tlt):
-    
-def tomo_fourier_mask(ang, tomo_size, out_mask = False, thick = 4, sigma = 2, z_pad = 10, use_half_fourier = False,
-                      angle_offset = 0.75, rotx = False, invert = False):
-    
-    """
-    
-    based on https://www.sciencedirect.com/science/article/pii/S1047847714000288
-    
-    validation 
-    s = 20 + 2
-    t = 1
-    test = np.zeros((s,s))
-    test[1:t+1,1:t+1] = 1
-    sh = (s/2.) - 1 - (t)/2
-    test = shift(test, (sh, sh), prefilter = True, order = 1)
-    ff,ax = plt.subplots(1,3)
-    rotated_test = rotate(test, 90, prefilter = True, order = 1)
-    test = shift(test, (0.5, 0.5), prefilter = True, order = 1)
-    rotated_test = shift(rotated_test, (0.5, 0.5), prefilter = True, order = 1)
-    rotated_test = rotated_test[1:-1, 1:-1]
-    test = test[1:-1, 1:-1]
-    print(test.shape)
-    ax[0].imshow(test)
-    ax[1].imshow(rotated_test)
-    ax[2].imshow(rotated_test - test)
-    """
-    
-    def def_plane(fit, tomo_size):
-        X, Y = np.meshgrid(
-                np.arange(-tomo_size[0]//2, tomo_size[0]//2), np.arange(-tomo_size[1]//2, tomo_size[1]//2))
-        Z = fit[0]*X + fit[1]*Y + fit[2]
-        return X, Y, Z
-    
-    def deg2slope(ang):
-        x = np.cos(np.radians(ang))
-        y = np.sin(np.radians(ang))
-        return y/x
-    
-    def squeezed_angle(ang, ratio):
-        x = np.cos(np.radians(ang))
-        y = np.sin(np.radians(ang))*ratio
-        return np.round(np.degrees(np.arctan(y/x)), decimals = 3)
-    
-    b = 1
-    ratio = float(tomo_size[2])/tomo_size[0]
-    tomo_size = np.array(tomo_size) + b*2
-    #adding 4 to size. Image needs to be shifted by +0.5,+0.5 to align with imod origin
-    
-    if angle_offset:
-        #the angles of slices in imod tomogram FFT are slightly off at higher angles,
-        #almost like they're rotated in one direction by a scalar * 1/cos
-        ang = np.array(ang) + angle_offset * np.sin(np.radians(np.absolute(ang)))
-        #ang = np.array(ang) + angle_offset
-    
-    
-    if tomo_size[0]%2:
-        offset = True
-        tomo_size[0] += 1
-    else:
-        offset = False
-        
-    tomo_size[2] += z_pad*2
-
-    #z padding to avoid filterin edge effects
-    t2d = np.zeros((tomo_size[2], int(np.ceil((np.sqrt(2)*tomo_size[0])/2)*2) + 2), dtype = 'complex64')
-    m2d = np.zeros((tomo_size[2], tomo_size[0]), dtype = 'complex64')
-
-    if offset:
-        mask = np.zeros((tomo_size[2] - b*2 - z_pad*2, tomo_size[1] - b*2, tomo_size[0] - 1 - b*2), dtype = 'complex64')
-    else:
-        mask = np.zeros((tomo_size[2] - b*2 - z_pad*2, tomo_size[1] - b*2, tomo_size[0] - b*2), dtype = 'complex64')
-    diff = int((t2d.shape[1] - tomo_size[0])/2)
-    
-    for a in range(len(ang)):
-        
-        t2d[...] = 0
-        t2d[1: 1 + thick] = 1.+0j
-        t2d = shift(t2d, ((tomo_size[2]/2.) - 1 - thick/2., 0), prefilter = True, order = 1)
-        #this places it in scipy origin of rotation. Shift + 0.5,+0.5 for imod origin
-        t2d = rotate(t2d, squeezed_angle(ang[a], ratio), reshape = False, prefilter = True, order = 1)
-        #the fourier space where slices are placed has even dimensions in X, Z and is then squeezed into tomo size
-        #instead I squeeze the Y component of the tilt angle
-        t2d = gaussian_filter(t2d, sigma) 
-        m2d = np.max((t2d[:, diff + 1:-diff + 1], m2d), axis = 0)
-
-    
-    if z_pad:
-        m2d = m2d[z_pad:-z_pad]
-    if offset:
-        m2d = shift(m2d, (0, -0.5), prefilter = True, order = 1)
-        m2d = m2d[:, :-1] 
-        
-    m2d /= np.max(m2d) #max 1
-    m2d = shift(m2d, (0.5,0.5), prefilter = True, order = 1)
-    m2d = m2d[b:-b, b:-b]
-    mask[...] = m2d[:, None, :]
-    if invert:
-        mask = (mask - 1)
-        mask *= np.sign(mask)
-    if rotx:
-        mask = np.rot90(mask, k = -1)
-        #origin is no longer correct after rotation...quick fix, leaves an empty row of pixels
-        mask = shift(mask, (0,1,0), prefilter = True, order = 1)
-        
-        warnings.warn('rotx may be in the wrong direction, not verified.')
-    if use_half_fourier:
-        mask = mask[:, :, mask.shape[2]//2 - 1:]
-    if out_mask:
-        write_mrc(out_mask, mask, mode = 4, set_float = False)
-    
-    return mask
 
 
 def replace_pcles(average_map, tomo_size, csv_file, mod_file, outfile, apix,
                   rotx = True):
 
-    #remove inputs: group_mask = False, extra_bin = False, average_volume_binning = 1
     """
+    Backplotted particles are still not perfectly centered, possibly 
+    due to peet using a different rotation centre convention.
+    
     Plotback particles using IMOD model and motive list. average_map voxel
     size does not necessarily need to match the tomogram pizel size.
     
@@ -1827,6 +1671,7 @@ def replace_pcles(average_map, tomo_size, csv_file, mod_file, outfile, apix,
         z_offset = offsets[p][2] + mod[p][2] - z_pos     
         
         new_ave = ave.copy()
+        #peet_centre = Vector.Vector(x_centre, y_centre, z_centre)
         shifted_ave = new_ave.rotate_by_matrix(mat_list[p], ave.centre(), cval = 0)
         
         if average_volume_binning == 1:  
@@ -1844,13 +1689,6 @@ def replace_pcles(average_map, tomo_size, csv_file, mod_file, outfile, apix,
         x_d = xsize % 2
         y_d = ysize % 2
         z_d = zsize % 2
-        
-        # x_p_min = np.math.floor(max(0, x_pos - xsize / 2))
-        # x_p_max = np.math.ceil(min(tomo_size[0], x_d + x_pos + xsize / 2))
-        # y_p_min = np.math.floor(max(0, y_pos - ysize / 2))
-        # y_p_max = np.math.ceil(min(tomo_size[1], y_d + y_pos + ysize / 2))
-        # z_p_min = np.math.floor(max(0, z_pos - zsize / 2))
-        # z_p_max = np.math.ceil(min(tomo_size[2], z_d + z_pos + zsize / 2))
 
         x_p_min = np.math.ceil(max(0, x_pos - xsize / 2))
         x_p_max = np.math.floor(min(tomo_size[0], x_d + x_pos + xsize / 2))
@@ -1891,7 +1729,6 @@ def replace_pcles(average_map, tomo_size, csv_file, mod_file, outfile, apix,
         z_n_max = int(z_n_max)
 
         try:
-            #27 
             tomo.fullMap[z_p_min:z_p_max, y_p_min:y_p_max, x_p_min:x_p_max]\
         += shifted_ave.fullMap[z_n_min:z_n_max, y_n_min:y_n_max, x_n_min:x_n_max]
         except:
@@ -1935,13 +1772,6 @@ def reproject_volume(output_file, tomo = False, ali = False, tlt = False,
         IMOD_comfile instance with tilt.com parameters. The default is False.
     excludelist : list if int, optional
         List of views to exclude, numbered from 1. The default is [].
-    write_comfile : bool, optional
-        If true and IMOD_comfile is specified, write command file. The default is False.
-
-
-    Returns
-    -------
-    None.
 
     """
     #operates in 2 modes: with and without tiltcom. tiltcom overrides optional inputs
@@ -1964,16 +1794,6 @@ def reproject_volume(output_file, tomo = False, ali = False, tlt = False,
     str_tilt_angles = [str(x.strip('\n\r').strip(' ')) for x in open(tlt)]
     str_tilt_angles = [str_tilt_angles[x] for x in range(len(str_tilt_angles))
                        if x + 1 not in excludelist] #numbered from 1
-
-    # if write_comfile and tiltcom:
-    #     tiltcom.dict['RecFileToReproject'] = tiltcom.dict['OutputFile']
-    #     tiltcom.separator_dict['RecFileToReproject'] = None
-    #     tiltcom.dict['REPROJECT'] = [float(x) for x in str_tilt_angles]
-    #     tiltcom.separator_dict['REPROJECT'] = ','
-    #     tiltcom.dict['OutputFile'] = output_file
-    #     out_dir = os.path.split(output_file)[0]
-    #     if not out_dir:
-    #         out_dir = os.getcwd()
     
     cmd_list = ['tilt',
                 '-REPROJECT', (',').join(str_tilt_angles),
@@ -1986,16 +1806,13 @@ def reproject_volume(output_file, tomo = False, ali = False, tlt = False,
                          '-THICKNESS', thickness])
 
     cmd_list.extend(add_tilt_params)
-    #check_output((' ').join(cmd_list), shell = True)
     run_generic_process(cmd_list)
     
     
-def mask_from_plotback(volume, out_mask, size = 5,
-                           lamella_mask_path = False,
-                           mean_filter = True,
-                           invert = False):
+def mask_from_plotback(volume, out_mask, size = 5, lamella_mask_path = False,
+                       mean_filter = True, invert = False):
     """
-    Thresholds a plotback and generates a smooth mask.
+    Generates a soft-edge mask by thresholding plotback.
 
     Parameters
     ----------
@@ -2008,6 +1825,10 @@ def mask_from_plotback(volume, out_mask, size = 5,
     lamella_mask_path : str, optional
         Path to lamella mask, which will be multiplied with the output mask.
         The default is False.
+    mean_filter : bool
+        Prefilter using mtffilter bandpass. The default is True.
+    invert : bool
+        Invert contrast. The default is False.
 
     Returns
     -------
@@ -2215,25 +2036,8 @@ def match_tomos(ref_tiltcom, query_tiltcom, out_dir,
         DESCRIPTION.
 
     """
-    
-    #two comfiles
-    
-    """
-    returns translation and rotation between two tomograms:
-        1) extracts parameters from rec_dir and out_dir comfiles
-        2) makes (binned) versions
-        3) checks rotation and translation by comparing strips of each tomo
-             or use 3D  cc (corrsearch3d), use_corr = True
-    How tiny: additional binning relative to input tomo
-    works fine at bin 16 (60 apix), accurate to ~3 unbinned pixels and 0.2 degrees
-    copy_orig [str] path to correctly binned ref tomo for matching
-        if not False, skips reference tomo generation
-    """
-
-    #angrange = 20 #+/- 10 degrees
 
     imodscript(ref_tiltcom, out_dir)  
-
     imodscript(query_tiltcom, out_dir)  
 
     rtiltcom = IMOD_comfile(out_dir, ref_tiltcom)
@@ -2259,11 +2063,6 @@ def match_tomos(ref_tiltcom, query_tiltcom, out_dir,
                          - nSHIFT*qtiltcom.dict['IMAGEBINNED'], decimals = 2)
         OFFSET = np.round((qtiltcom.dict['OFFSET'] - nOFFSET), decimals = 2)
         global_xtilt = np.round((qtiltcom.dict['XAXISTILT'] - nglobal_xtilt), decimals = 2)
-        # print('iter_n %s' % i)
-        # print('corrsearch calc SHIFT, OFFSET, global_xtilt %s,%s,%s'
-        #       % (nSHIFT, nOFFSET, nglobal_xtilt*qtiltcom.dict['IMAGEBINNED']))
-        # print('corrsearch curr SHIFT, OFFSET, global_xtilt %s,%s,%s'
-        #       % (SHIFT, OFFSET, global_xtilt))
         
         new_qtiltcom = deepcopy(qtiltcom)
         new_qtiltcom.dict['OFFSET'] = OFFSET
@@ -2277,9 +2076,35 @@ def match_tomos(ref_tiltcom, query_tiltcom, out_dir,
     return SHIFT, OFFSET, global_xtilt        
 
 def tomo_subtraction(tilt_comfile, out_dir, mask = False, plotback3d = False, ali = False,
-                     iterations = 1, supersample = True, dilation_size = 0,
+                     iterations = 1, supersample = True, dilation_size = 10,
                      fakesirt = 20
                      ):
+    """
+    This is essentially J.J. Fernandez's masktomrec.
+
+    Parameters
+    ----------
+    tilt_comfile : IMOD_comfile object
+        parsed tilt.com.
+    out_dir : str
+        Output dir.
+    mask : str or bool, optional
+        Path to mask volume. Will be generated if plotback is specified instead.
+        The default is False.
+    plotback3d : str or bool, optional
+        See mask. The default is False.
+    ali : str or bool, optional
+        Read from tiltcom_file if not specified. The default is False.
+    iterations : int, optional
+        Number of subtraction iterations. The default is 1.
+    supersample : bool, optional
+        Supersample (re)projection?. The default is True.
+    dilation_size : int, optional
+        See mask_from_plotback. The default is 10.
+    fakesirt : int, optional
+        Use fakesirt iterations? 0 disables this. The default is 20.
+
+    """
 
     def update_comdict(orig_dict, mod_dict):
         for key in mod_dict.keys():
@@ -2314,8 +2139,7 @@ def tomo_subtraction(tilt_comfile, out_dir, mask = False, plotback3d = False, al
     
     if not ali:
         ali = tiltcom.dict['InputProjections']
-    
-    #ali_mode = int(check_output('header -mode %s' % (ali), shell = True).split()[0])
+
     out_tiltcom = deepcopy(tiltcom)
     for ite in range(iterations + 1):
         
@@ -2344,9 +2168,6 @@ def tomo_subtraction(tilt_comfile, out_dir, mask = False, plotback3d = False, al
             
         elif ite == 0:
             check_output('newstack -mode 2 %s %s' % (ali, sub_ts), shell = True)
-            # if os.path.islink(sub_ts):
-            #     os.unlink(sub_ts)
-            # os.symlink(ali, sub_ts)
 
             if supersample:
                 if 'SuperSampleFactor' not in out_tiltcom.dict:
@@ -2365,32 +2186,29 @@ def tomo_subtraction(tilt_comfile, out_dir, mask = False, plotback3d = False, al
         out_tiltcom.dict = update_comdict(out_tiltcom.dict, a_dict)
         out_tiltcom.write_comfile(out_dir, change_name = 'sub_tilt.com')
         imodscript('sub_tilt.com', out_dir)
-            
-            
-            
-            
-            
-            # a_dict = {'OutputFile': out_tom,
-            #       'InputProjections': sub_ts
-            #           }
-            
-            # if supersample:
-            #     if 'SuperSampleFactor' not in out_tiltcom.dict:
-            #         a_dict['SuperSampleFactor'] = 2
-            #     if 'ExpandInputLines' not in out_tiltcom.dict:
-            #         a_dict['ExpandInputLines'] = None
-            # if fakesirt:
-            #     if 'FakeSIRTiterations'  not in out_tiltcom.dict:
-            #         a_dict['FakeSIRTiterations'] = fakesirt
-                    
-            # out_tiltcom.dict = update_comdict(out_tiltcom.dict, a_dict)
-            # out_tiltcom.write_comfile(out_dir, change_name = 'sub_tilt.com')
-            # imodscript('sub_tilt.com', out_dir)
-
-
+    
+        
+    
 #running stuff
 
 def write_to_log(log, s, debug = 1):
+    """
+    Append to log file
+
+    Parameters
+    ----------
+    log : TYPE
+        DESCRIPTION.
+    s : TYPE
+        DESCRIPTION.
+    debug : TYPE, optional
+        DESCRIPTION. The default is 1.
+
+    Returns
+    -------
+    None.
+
+    """
     if debug > 0:
         if s != '' or s != '\n':
         #I would rather not print empty lines

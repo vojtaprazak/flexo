@@ -19,9 +19,6 @@ from skimage.filters import threshold_yen
 from scipy.ndimage import gaussian_filter
 import mrcfile
 import time
-#from scipy.spatial.distance import cdist
-#from scipy.optimize import minimize
-#import sys
 
 from flexo_tools import find_nearest, get_apix_and_size, get_peaks
 
@@ -91,6 +88,10 @@ class Extracted_particles:
                                 for x in open(self.tilt_angles)])
 
     def remove_tilts_using_excludelist(self, excludelist = []):
+        """
+        Remove shifts from imod excludelist views.
+
+        """
 
         #this must be run exactly once
         if not self.flg_excludelist_removed:
@@ -826,10 +827,7 @@ class Extracted_particles:
         med_map_shifts = np.zeros((self.num_tilts, self.num_pcls, n_peaks, 2))
         med_map_ccvals = np.zeros((self.num_tilts, self.num_pcls, n_peaks))
         med_map_mask = np.zeros((self.num_tilts, self.num_pcls, n_peaks), dtype = bool)
-        
-        
-        #nbr_med_maps = np.zeros((self.num_tilts, self.num_pcls, interp*limit*2, interp*limit*2))
-        
+
         st = time.time()
         lts = []
         
@@ -1059,8 +1057,6 @@ class Extracted_particles:
                         color = 'cornflowerblue', label = 'quartiles')
         ax.set(xlabel = 'ordered particles', ylabel = 'CCC')
         ax.legend(loc = 'upper right')
-#        ax.set(xlabel = 'ordered particles')
-#        plt.ylabel('CCC')
         f.suptitle('CCC median, quartiles and min/max.')
         if out_dir:
             plt.savefig(join(self.out_dir, 'tilt_cc_values.png'))

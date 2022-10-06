@@ -4,12 +4,13 @@ Created on Mon Apr  4 09:54:43 2022
 
 @author: vojta
 """
-#import dateutil
+
 from dateutil import parser as dparser
 import numpy as np
+
 class Mdoc_parser:
     """
-    Parse IMOD mdoc file. No promises made.
+    Parse IMOD mdoc file. No promises made. Initiate with mdoc path.
     
     """
     def __init__(self, mdoc):
