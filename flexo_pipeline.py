@@ -12,30 +12,16 @@ from copy import deepcopy
 from os.path import join, realpath, split, isfile, isdir
 from subprocess import check_output
 import numpy as np
-from flexo_tools import (get_apix_and_size, find_nearest,
-                         
-                         
-                         optimal_lowpass_list)
-from flexo_tools import match_tomos
-from flexo_tools import (machines_from_imod_calib, 
-                         optimal_lowpass,
-                         )
-#from PEETModelParser import PEETmodel
-#from PEETPRMParser import PEETPRMFile 
-#from scipy.spatial import KDTree
 from IMOD_comfile import IMOD_comfile
 import json
 import multiprocessing
 import socket
-#import matplotlib.pyplot as plt
-#import mrcfile
 import warnings 
-
-
 from extracted_particles import Extracted_particles
 from flexo_peet_prm import Flexo_peet_prm
-from flexo_tools import (run_generic_process, run_processchunks, check_ssh, imodscript, get_binned_size)
-#from PEETModelParser import PEETmodel
+from flexo_tools import (run_generic_process, run_processchunks, check_ssh,
+    imodscript, get_binned_size, get_apix_and_size, find_nearest,
+    optimal_lowpass_list, match_tomos, machines_from_imod_calib, optimal_lowpass)
 
 class Flexo:
     
@@ -107,7 +93,6 @@ class Flexo:
             self.Cs = kwargs.get('Cs')
             self.ampC = kwargs.get('ampC')
             self.ps = ps
-            #self.wl = 
             self.apix = kwargs.get('apix')
             self.st_apix = kwargs.get('st_apix')
             self.order = kwargs.get('order')
@@ -124,20 +109,13 @@ class Flexo:
             self.orig_out_dir = out_dir #keep the same throughout iterations
             self.out_dir = join(out_dir, 'iteration_1') 
             self.update_dirs()
-            # self.out_json = join(self.out_dir, 'flexo.json')
-            # self.npy_dir = join(self.out_dir, 'npy')
-            # self.pcle_dir = join(self.out_dir, 'extracted_particles')
-            # self.xcor_peak_dir = join(self.out_dir, 'xcor_peaks')
-            # self.match_tomos_dir = join(self.out_dir, 'match_tomos')
-            # self.init_peet_dir = join(self.out_dir, 'init_peet')
-            # self.peet_dir = join(self.out_dir, 'peet')
             
             #models
             self.out_fid = [] #new fiducial model with calculated shifts
             
             #intermediate image or volume files
-            self.query2d = kwargs.get('reprojected_tomo') #whatever becomes the query for cc
-            self.plotback2d = kwargs.get('plotback2d') #whatever becomes the reference for cc
+            #self.query2d = kwargs.get('reprojected_tomo') #whatever becomes the query for cc
+            #self.plotback2d = kwargs.get('plotback2d') #whatever becomes the reference for cc
 
             #masking
             self.lamella_mask_path = kwargs.get('lamella_mask_path')
@@ -158,50 +136,35 @@ class Flexo:
             self.tlt = kwargs.get('tlt')
             self.defocus_file = kwargs.get('defocus_file')
             self.xf = kwargs.get('xf')
-            #self.localxf = kwargs.get('localxf')
-
-
+            
             #sorting particles, np arrays
             self.groups = kwargs.get('groups')
             self.sorted_pcls = kwargs.get('sorted_pcls')
             #0=xcoords, 1=ycoords, 2=tilt number, 3=particle index, 4=group id (from 0), 5=tilt angle, 6=defocus)]
-            
-            
             #running parameters
             self.path = (',').join(['"' + x + '"' for x in sys.path])
             self.machines = machines #socket.gethostname() - make int or list. by default runs on 1 local core. If there isn't a cpu.adoc then 1 local core used
             self.pcls_per_core = pcls_per_core
-            self.box_size = kwargs.get('box_size') #non square boxed don't make sense here
             self.limit = limit
             self.interp = interp
             self.n_peaks = n_peaks
-            
             self.particle_interaction_distance = kwargs.get('particle_interaction_distance')
-            
             self.use_existing_fid = use_existing_fid
             self.add_fiducial_model = add_fiducial_model
             self.non_overlapping_pcls = non_overlapping_pcls
             self.noisy_ref = noisy_ref
-            
             self.allow_large_jumps =  allow_large_jumps
             self.dilation_size = 0
-            
             self.use_init_ali = use_init_ali
             self.spec_tiny_size = spec_tiny_size
-            #self.orthogonal_subtraction = orthogonal_subtraction
-            #self.d_orth = d_orth
-            #self.n_orth = n_orth
             self.butter_order = butter_order
-            #self.dose = kwargs.get('dose') #electrons/angstrom/tilt 
-            #self.dosefilter = dosefilter
             self.debug = debug
             self.plot_pcls = kwargs.get('plot_pcls') #write out plots for these particles 
-            
             
             #iteration control, restarting
             self.num_iterations = num_iterations
             self.curr_iter = kwargs.get('curr_iter') #numbered from 1?
-            self.fsc_dirs = [] 
+            #self.fsc_dirs = [] 
             self.res = []   #list of ndarrays: (sampling frequency at cutoff, resolution, area under FSC, last bin for area calculation)
             
             
@@ -213,9 +176,7 @@ class Flexo:
             #self.flg_aligncom_formatted = kwargs.get('flg_aligncom_formatted')
             self.flg_tomos_exist = kwargs.get('flg_tomos_exist')
             self.flg_peet_ran = kwargs.get('flg_peet_ran')
-            
-
-
+        
             #tomogram parameters
             #binning
             self.tomo_binning = kwargs.get('tomo_binning') #flexo runs at this binning
@@ -227,15 +188,7 @@ class Flexo:
             self.thickness = kwargs.get('thickness')
             self.tomo_size = kwargs.get('tomo_size')
             self.st_size = kwargs.get('st_size')
-            #self.global_xtilt = kwargs.get('global_xtilt')
             self.excludelist = []
-            #self.axiszshift = kwargs.get('axiszshift')
-            #self.separate_groups = kwargs.get('separate_groups')
-            #self.zero_tlt = zero_tlt # no longer used
-            #self.tilt_angles = kwargs.get('tilt_angles') #these are no longer used for anything
-            #self.SHIFT = kwargs.get('SHIFT')
-            #self.OFFSET = 0 #this should not be global. all offsets are immediately transfered to .tlt
-            #self.separate_groups = kwargs.get('separate_groups')
             self.n_patches = kwargs.get('n_patches')
             self.fidn = fidn
             self.MinSizeOrOverlapXandY = kwargs.get('MinSizeOrOverlapXandY') 
@@ -265,28 +218,13 @@ class Flexo:
             self.mol_1_average_volume = kwargs.get('mol_1_average_volume')
             self.mol_1_ite = mol_1_ite #peet iteration, default last 
 
-
-            
             #OR
             self.mol_1_model_file = kwargs.get('mol_1_model_file') #initial 3d model file. read from prm(s) if specified
             self.mol_1_motl = kwargs.get('mol_1_motl') #initial motive list, matching model_File. read from prm(s) if specified
             self.mol_1_model_file_binning = kwargs.get('mol_1_model_file_binning') #this is only necessary if model file is specified instead of prm, and is different binning from input tomogram binning
         
             #peet parameters.
-            self.peet_search = kwargs.get('peet_search') #'shift_only', 'use_original_params', 'manual'
-  
-#            #no need to have these written out here
-#            self.mol_1_full_model_file = kwargs.get('mol_1_full_model_file') #generated during model reprojection, fits unrotated full.rec
-            
-            #MOVING TO FLEXO_PEET_PRM
-            #self.reprojected_mod = kwargs.get('reprojected_mod') #3d model projected to 2d fiducial model
-#            self.fid_list = [] #split reprojected_mod
-            
-#            self.split_motls = [] #split motl, matching split3d_models
-#            self.split3d_models = [] #3d pcl model after non_overlapping_pcles, in rotated orientation
-            
-            
-            
+            self.peet_search = peet_search #'shift_only', 'use_original_params', 'manual'
             self.cutoff = cutoff #fsc cutoff
             self.get_area = get_area #use area under fsc instead of resolution
             
@@ -294,15 +232,8 @@ class Flexo:
 #            self.smooth = kwargs.get('smooth')
 #            self.unreasonably_harsh_filter = kwargs.get('unreasonably_harsh_filter')
             self.no_ctf_convolution = kwargs.get('no_ctf_convolution') #this is for running toy data where no ctf convolution should be applied
-#            self.poly = kwargs.get('poly')
-#            self.poly_order = kwargs.get('poly_order')
-#            self.smooth_ends = kwargs.get('smooth_ends')
             
             print('DEV NOTE xfproduct scaleshifts needs to take into account (at least relative) binning. test this separately')
-            
-            #self.no_cc_norm = True
-            #self.orderL = True
-            #self.dosesym = False
             self.ignore_resolution_check = True
             self.ignore_partial = kwargs.get('ignore_partial')
             self.xcor_normalisation = xcor_normalisation #     'none' 'phase_corr' 'by_autocorr' 
@@ -312,8 +243,6 @@ class Flexo:
             self.pre_filter = kwargs.get('pre_filter') # 4 values for mtffilter -hi cutoff,falloff, -lo cutoff,falloff, list. Helps with noisy_ref = False
             self.noisy_ref_std = noisy_ref_std
             self.exclude_worst_pcl_fraction = exclude_worst_pcl_fraction #exclude particles with the worst median ccc. 0/False disables this
-#            self.exclude_lowest_cc_fraction = exclude_lowest_cc_fraction #Removes the worst scoring shifts. NOT RECOMMENDED # gone
-            #self.use_refined_halfmap_models = use_refined_halfmap_models #i.e. combined halfmap models are used for plotback generation
             self.masktomrec_iters = kwargs.get('masktomrec_iters')
             self.min_neighbours = min_neighbours
             self.use_local_median_shifts = use_local_median_shifts #written shifts are replaced by median shifts of local particles
@@ -362,6 +291,14 @@ class Flexo:
         """
 
     def to_json(self):
+        """
+        Write class instance to json. This can be used to re-initialise, but 
+        is primarily used for passing paramters in IMOD processchunks.
+        
+        Numpy array attributes are pickled and replaced by path strings,
+        some internal class instances are stored as independent .json.
+
+        """
 
         if not isdir(self.npy_dir):
             os.makedirs(self.npy_dir)
@@ -399,13 +336,13 @@ class Flexo:
     def update_dirs(self):
         self.out_json = join(self.out_dir, 'flexo.json')
         self.npy_dir = join(self.out_dir, 'npy')
-        #self.pcle_dir = join(self.out_dir, 'extracted_particles')
-        #self.xcor_peak_dir = join(self.out_dir, 'xcor_peaks')
         self.match_tomos_dir = join(self.out_dir, 'match_tomos')
-        #self.init_peet_dir = join(self.out_dir, 'init_peet')
-        #self.peet_dir = join(self.out_dir, 'peet')
-
+        
     def update_comfiles(self):
+        """
+        Initiate IMOD_comfile instances from IMOD command files
+
+        """
         self.tiltcom = IMOD_comfile(self.rec_dir, 'tilt.com')
         self.newstcom = IMOD_comfile(self.rec_dir, 'newst.com')
         self.aligncom = IMOD_comfile(self.rec_dir, 'align.com')
@@ -413,7 +350,9 @@ class Flexo:
         
     def initiate_molecules(self):
         """
-        Initiate a list of objects, one for each molecule type.
+        Initiate a list of objects, one for each molecule type. The purpose of
+        this is to be able to handle multiple particle types for alignment (e.g.
+        ribosomes and microtubules etc...)
         
         Different molecule types are specified by numbered attribute names:
         mol_[molecule number]_attribute.
@@ -448,9 +387,9 @@ class Flexo:
                     other_dict['search_rad'] = self.search_rad
                 else:
                     other_dict['search_rad'] = False
-                other_dict['phimax_step'] = False
-                other_dict['psimax_step'] = False
-                other_dict['thetamax_step'] = False
+                other_dict['phimax_step'] = [0, 1]
+                other_dict['psimax_step'] = [0, 1]
+                other_dict['thetamax_step'] = [0, 1]
             if self.peet_search == 'manual':
                 #mol_x_search_rad etc shuld be converted to search_rad. 
                 #replace with original prm if one of these doesn't exist
@@ -467,6 +406,11 @@ class Flexo:
         self.to_json()
         
     def export_mol_attr(self):
+        """
+        Grab parameters from flexo_peet_prm instances. This is needed for iterating.
+
+
+        """
         for mol_id in range(len(self.m_objs)):
             if self.m_objs[mol_id].prm1:
                 #a sinle prm would have been split into halves so only need to check this
@@ -482,6 +426,8 @@ class Flexo:
         
     def verify_inputs(self):
         """
+        Read paths from command files, check binning, common pitfalls.
+        
         base_name is read from imod com files if not specifie
         """  
         
@@ -555,18 +501,10 @@ class Flexo:
             else:
                 raise Exception('File not found %s. Run with pre_bin = True' % self.full_tomo)
                 
-           
         # check binning ##############
         st_apix, stack_size = get_apix_and_size(self.st)
         tomo_apix, tomo_size = get_apix_and_size(self.tomo)
-        #full_tomo_apix, full_tomo_size = get_apix_and_size(self.full_tomo)    
         ali_apix, ali_size = get_apix_and_size(self.ali)
-        
-        # if tomo_apix != full_tomo_apix:
-        #     raise ValueError(('The original unrotated tomogram (%s)' +
-        #                      'pixel size does not match the rotated tomogram (%s).')
-        #                      % (split(self.full_tomo)[1], split(self.tomo)[1]))
-            
         self.apix = float(tomo_apix)
         self.tomo_size = tomo_size.tolist()
         self.st_size = stack_size.tolist()
@@ -614,9 +552,7 @@ class Flexo:
             warnings.warn('Voltage specified in ctfcorrection.com is 200kV. Change this in IMOD gui/ctfcorrection.com if this is not correct.')
         self.Cs = self.ctfcom.dict['SphericalAberration']*1E7
         self.ampC = self.ctfcom.dict['AmplitudeContrast']
-        
-        
-                
+
         # exposure ##############
         
         excludelist_mask =  np.isin(np.arange(stack_size[2]), np.array(self.excludelist) - 1, invert = True)
@@ -625,6 +561,13 @@ class Flexo:
             isorder = (all((not isinstance(self.order, (bool, type(None))),
                           not isinstance(self.tilt_dose, (bool, type(None)))
                           )) or isinstance(self.order, str)) # try to read the file in case it  contains dose
+            if not ismdoc:
+                if isfile(self.st + '.mdoc'):
+                    self.mdoc = self.st + '.mdoc'
+                    ismdoc = True
+            if not isfile(self.mdoc):
+                warnings.Warn('Specified mdoc not found: %s' % self.mdoc)
+        
             if ismdoc or isorder:
                 self.lowfreqs = optimal_lowpass_list(order = self.order,
                           mdoc = self.mdoc, flux = self.flux, tilt_dose = self.tilt_dose,
@@ -653,6 +596,10 @@ class Flexo:
         self.to_json()
 
     def update_comdict(self, orig_dict, mod_dict):
+        """
+        Update dictionary, just neatining up.
+
+        """
         for key in mod_dict.keys():
             orig_dict[key] = mod_dict[key]
         return orig_dict
@@ -660,7 +607,7 @@ class Flexo:
     def format_align(self, output_binning, OFFSET = 0, out_dir = False,
                      fid_per_patch = 40):
         """
-        Generates an align.com. 
+        Generates an align.com (runs IMOD tiltalign). 
         Important: either keep using the original angle offset and .rawtlt, or
         zero out angle offset and use .tlt.
 
@@ -785,8 +732,9 @@ class Flexo:
     def format_newst(self, output_binning, change_comname = False,
                      use_rec_dir = False, out_dir = False, output_ali = False):
         """
-        Modifies and writes newst.com. Output paths will point to out_dir,
-        input path (stack file) will be kept pointing to the rec_dir by default.
+        Modifies and writes newst.com (runs IMOD newtack). Output paths will
+        point to out_dir, input path (stack file) will be kept pointing to 
+        the rec_dir by default.
 
         Parameters
         ----------
@@ -826,8 +774,7 @@ class Flexo:
         #rotation could happen, order size based on existing tilt.com
         if 'SizeToOutputInXandY' in self.newstcom.dict.keys():
             orig_size = self.newstcom.dict['SizeToOutputInXandY']
-            #else:
-            #    _, orig_size = get_apix_and_size(self.ali)
+
             if orig_size[0] < orig_size[1]:
                 binned_size = np.sort(binned_size[:2])
             else:
@@ -909,6 +856,7 @@ class Flexo:
         
     def format_ctfcom(self, out_dir = False, input_ali = False, output_ali = False):
         
+        
         if not out_dir:
             out_dir = self.out_dir
         
@@ -930,6 +878,12 @@ class Flexo:
 
     
     def combine_fiducial_models(self):
+        """
+        Combine an existing fiducial model with flexo fiducial model, should 
+        ignore patch tracked models.
+
+
+        """
         
         if self.use_existing_fid:
             #by default, existing fid is ignored if it's a patch tracked model
@@ -1010,6 +964,10 @@ class Flexo:
         return rotated_rec
 
     def make_all_tomos(self):
+        """
+        Run tomogram positioning alignment, make (PEET) and final tomo.
+
+        """
         
         self.format_align(self.tomo_binning, out_dir = self.out_dir)
         #self.aligncom.dict['AngleOffset'] = 0 #not when using .rawtlt!!!
@@ -1030,33 +988,25 @@ class Flexo:
         self.flg_tomos_exist = True
         self.to_json()
         
-    # def run_peet(self):  
-    #     if not self.mol_1_prm and not (self.mol_1_prm1 and self.mol_1_prm2):
-    #         print('PEET prm file not specified, PEET will not run.')
-    #     else:
-    #         if self.curr_iter == 1:
-    #             if self.fsc_dirs: #meaning this run is being restarted, in which case skip init_peet
-    #                 self.fsc_dirs = [self.init_peet_dir]
-    #             else:
-    #                 self.peet_apix = self.prep_peet(self.init_peet_dir, 'init')
-    #                 peet_halfmaps(self.init_peet_dir, self.mol_1_prm1, self.mol_1_prm2, self.machines, use_davens_fsc = self.use_davens_fsc)
-    #                 self.fsc_dirs.append(self.init_peet_dir)
-            
-    #         self.peet_apix = self.prep_peet(self.peet_dir, self.peet_tomo)
-            
-    #         self.flg_peet_ran = True # this needs to be here in case peet crashes and a restart is attempted
-    #         self.to_json()
-            
-    #         peet_halfmaps(self.peet_dir, self.mol_1_prm1, self.mol_1_prm2, self.machines, use_davens_fsc = self.use_davens_fsc)
-    #         self.fsc_dirs.append(self.peet_dir)
-
-    #     self.res = plot_fsc(self.fsc_dirs, self.peet_dir, self.cutoff, self.peet_apix)
-    #     self.to_json()
-    
-    
-            
-        
     def match_tiny_tomos(self, output_binning = False):
+        """
+        Attempt to match the initial and final tomogram positioning.
+
+        Parameters
+        ----------
+        output_binning : str, optional
+            Binning at which alignment is done. The default is False.
+
+        Raises
+        ------
+        Exception
+            DESCRIPTION.
+
+        Returns
+        -------
+        None.
+
+        """
         
         if not output_binning:
             output_binning = min(8, self.tomo_binning*2) # there is a risk corrsearch3d will crap out with (no patches fit or smh) if the tomo is too small
@@ -1086,16 +1036,6 @@ class Flexo:
         self.format_tilt(output_binning, output_rec = 'query_full.mrc',
                           use_rec_dir = False, out_dir = self.match_tomos_dir,
                           change_comname = 'query_tilt.com')
-        
-        # #this will likely break if the original transform file does not end in .xf
-        # new_xf = join(self.out_dir, self.base_name + '.xf')
-        # new_tlt = join(self.out_dir, self.base_name + '.tlt')
-        # if isfile(new_xf):
-        #     copyfile(new_xf, join(self.match_tomos_dir, split(new_xf)[1]))
-        # else:
-        #     raise Exception('%s does not exist.')
-        # if isfile(new_tlt):
-        #     copyfile(new_tlt, join(self.match_tomos_dir, split(new_tlt)[1]))
         
         imodscript('ref_newst.com', self.match_tomos_dir)
         imodscript('query_newst.com', self.match_tomos_dir)
@@ -1144,6 +1084,15 @@ class Flexo:
             
             
     def make_ts(self):
+        """
+        Generate 2D image data throug flexo_peet_prm 
+
+        Returns
+        -------
+        None.
+
+        """
+        
         
         for mol_id in range(len(self.m_objs)):
             if not self.m_objs[mol_id].flg_image_data_exist:
@@ -1159,6 +1108,16 @@ class Flexo:
         
         
     def merge_extracted_pcles(self):
+        """
+        Go through flexo_peet_prm objects and combine these into a single 
+        extracted_particles object for shift evaluation.
+
+        Returns
+        -------
+        None.
+
+        """
+        
         self.particles = deepcopy(self.m_objs[0].particles)
         if len(self.m_objs) > 1:
 
@@ -1174,9 +1133,7 @@ class Flexo:
                 self.particles.pcl_ids.extend(tmp_ids)
                 self.particles.sorted_pcls.append(tmp_pcls)
             self.particles.sorted_pcls = np.hstack(self.particles.sorted_pcls)
-                
-            #self.particles.sorted_pcls = np.hstack([mol_obj.particles.sorted_pcls for mol_obj in self.m_objs])
-            #self.particles.pcl_ids = np.concatenate([mol_obj.particles.pcl_ids for mol_obj in self.m_objs])
+            
             self.particles.num_pcls = np.sum([mol_obj.particles.num_pcls for mol_obj in self.m_objs])
             self.particles.groups = np.hstack([mol_obj.particles.groups for mol_obj in self.m_objs])
             self.particles.shifts = np.hstack([mol_obj.particles.shifts for mol_obj in self.m_objs])
@@ -1185,18 +1142,11 @@ class Flexo:
             self.particles.model_3d = np.vstack([mol_obj.particles.model_3d for mol_obj in self.m_objs])
 
         self.particles.out_dir = self.out_dir
-        
-            # self.particles.sorted_pcls = particles.sorted_pcls[:, [0,5,1,6,2,7,3,8,4]] #
-            # self.particles.groups = particles.groups[:, [0,5,1,6,2,7,3,8,4]] 
-            # self.particles.shifts = particles.shifts[:, [0,5,1,6,2,7,3,8,4]]
-            # self.particles.shift_mask = particles.shift_mask[:, [0,5,1,6,2,7,3,8,4]]
-            # self.particles.cc_values = particles.cc_values[:, [0,5,1,6,2,7,3,8,4]]
-            # self.particles.model_3d = particles.model_3d[[0,5,1,6,2,7,3,8,4]]
-            # self.particles.pcl_ids = np.concatenate([mol_obj.particles.pcl_ids for mol_obj in self.m_objs])
-            # 
     
     def process_shifts(self):
         """
+        Generate a fiducial model from shifts.
+        
         Parameters
         ----------
         particle_objs : list
@@ -1208,7 +1158,6 @@ class Flexo:
         
         self.particles.plot_median_cc_vs_tilt()
         self.particles.plot_particle_med_cc()
-        #self.particles.plot_shift_magnitude_v_cc(n_peaks = self.n_peaks)
         self.particles.plot_global_shifts()
 
         self.particles.pick_shifts_basic_weighting(
@@ -1223,10 +1172,31 @@ class Flexo:
         
         self.flg_shifts_exist = True
         self.to_json()
-            
         
     
     def iterate(self, curr_iter = False, num_iterations = False):
+        """
+        This runs the flexo "pipeline". If curr_iter != False, will try to
+        resume from an existing .json. 
+
+        Parameters
+        ----------
+        curr_iter : TYPE, optional
+            DESCRIPTION. The default is False.
+        num_iterations : TYPE, optional
+            DESCRIPTION. The default is False.
+
+        Raises
+        ------
+        Exception
+            DESCRIPTION.
+
+        Returns
+        -------
+        None.
+
+        """
+        
 
         #should be possible to restart from any point of any iteration
         #restart technically onle needs curr_iter and out_dir
@@ -1261,7 +1231,6 @@ class Flexo:
                     prev_fsc1 = prev_peet_dir + '/fsc1'
                     prev_fsc2 = prev_peet_dir + '/fsc2'
                     if isdir(prev_peet_dir):
-                        #self.mol_1_prm = join(prev_peet_dir, split(self.mol_1_prm[-1])) #vp: this should be False after PEET
                         self.__dict__['mol_%s_prm1' % mol_id] = join(prev_fsc1, split(self.__dict__['mol_%s_prm1' % mol_id][-1]))
                         self.__dict__['mol_%s_prm2' % mol_id] = join(prev_fsc2, split(self.__dict__['mol_%s_prm2' % mol_id][-1]))
                     else: 
@@ -1270,19 +1239,22 @@ class Flexo:
                         self.__dict__['mol_%s_prm2' % mol_id] = tmp_dict['mol_%s_prm2' % mol_id]
                         self.__dict__['mol_%s_tomogram_number' % mol_id] = tmp_dict['mol_%s_tomogram_number' % mol_id]
                         self.__dict__['mol_%s_ite' % mol_id] = tmp_dict['mol_%s_ite' % mol_id]
-                        
-                #self.__dict__['mol_%s_ite' % mol_id + 1] = 0
 
             for key in init_flags:
                 if not isinstance(tmp_dict[key], type(None)):
                     self.__dict__[key] = tmp_dict[key]
             
-            #if self.flg_aligncom_formatted and not self.flg_tomos_exist:
             print('DEV NOTE align might not be pointing to the right files here, check')
             if self.flg_tomos_exist:
                 self.aligncom = IMOD_comfile(self.out_dir, 'align.com') # allow manual modification and re-run.
 
         def prebin():
+            """
+            Re-make initial tomograms (iteration_0) with specified binning. 
+            If self.pre_bin == True, will use whatever binning is specified 
+            in initial IMOD com files.
+
+            """
             self.curr_iter = 0
             self.out_dir = join(self.orig_out_dir, 'iteration_0')
             self.update_dirs()            
@@ -1305,9 +1277,6 @@ class Flexo:
                 if isfile(tmp_ctf.dict['TransformFile']):
                     os.rename(tmp_ctf.dict['TransformFile'], tmp_ctf.dict['TransformFile'] + '~')
                 copyfile(self.ctfcom.dict['TransformFile'], tmp_ctf.dict['TransformFile'])
-            # if isfile(tmp_newst.dict['TransformFile']):
-            #     os.rename(tmp_newst.dict['TransformFile'], tmp_newst.dict['TransformFile'] + '~')
-            # copyfile(self.newstcom.dict['TransformFile'], tmp_newst.dict['TransformFile'])
             if not self.no_ctf_convolution:
                 imodscript('ctfcorrection.com', self.out_dir)
                 os.rename(tmp_ctf.dict['OutputFileName'],  tmp_ctf.dict['InputStack'])
@@ -1330,7 +1299,6 @@ class Flexo:
                              rotated_rec, tmp_rec), shell = True)
                 os.rename(tmp_rec, rotated_rec)
             if not self.keep_peet_binning:
-                print('#################################################')
                 for mol_obj in self.m_objs:
                     mol_obj.prep_peet(mol_obj.peet_dir, rotated_rec)
                 self.export_mol_attr()
@@ -1356,7 +1324,7 @@ class Flexo:
             restart()
         
         
-
+        ##### CORE LOOP ############
         while self.curr_iter <= self.num_iterations:
             startTime = time.time()
             if self.pre_bin:
@@ -1389,22 +1357,13 @@ class Flexo:
                     for mol_obj in self.m_objs:
                         if mol_obj.prm or (mol_obj.prm1 and mol_obj.prm2):
                             print('Running PEET with molecule %s...' % mol_obj.molecule_id)
-                            mol_obj.fsc_dirs = []
+                            if self.curr_iter == 1:
+                                mol_obj.fsc_dirs = []
+                                self.__dict__['mol_%s_fsc_dirs' % mol_obj.molecule_id] = []
                             print('DEV NOTE: setting fsc_dirs to [] here. Somehow the second m_obj.fsc_dirs get set to the same as the first..../??')
                             mol_obj.run_peet()
-                            
-                    # for m in range(len(self.m_objs)):
-                    #     print(0, self.m_objs[0], self.m_objs[0].fsc_dirs)
-                    #     print(1, self.m_objs[1], self.m_objs[1].fsc_dirs)
-                    #     if self.m_objs[m].prm or (self.m_objs[m].prm1 and self.m_objs[m].prm2):
-                    #         print('Running PEET with molecule %s...' % self.m_objs[m].molecule_id)
-                    #         #mol_obj.fsc_dirs = []
-                    #         print('DEV NOTE: setting fsc_dirs to [] here. Somehow the second m_obj.fsc_dirs get set to the same as the first..../??')
-                    #         self.m_objs[m].run_peet()
-                    #         print(0, self.m_objs[0], self.m_objs[0].fsc_dirs)
-                    #         print(1, self.m_objs[1], self.m_objs[1].fsc_dirs)
-
-
+                            self.__dict__['mol_%s_fsc_dirs' 
+                                          % mol_obj.molecule_id].extend(mol_obj.fsc_dirs)
 
             print('Iteration execution time: %s s.' % int(np.round(
                                 (time.time() - startTime), decimals = 0)))    
@@ -1426,8 +1385,6 @@ class Flexo:
             self.export_mol_attr()
 
             #check resolution improved
-            
-            #deal with rawtlt? otehr align files
             
             if not self.ignore_resolution_check and (self.mol_1_prm1 and self.mol_1_prm2):
                 if curr_iter > 0:
